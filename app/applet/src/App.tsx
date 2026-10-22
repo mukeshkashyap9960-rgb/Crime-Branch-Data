@@ -1286,7 +1286,7 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               <select
                 value={selectedSquad}
                 onChange={(e) => setSelectedSquad(e.target.value)}
@@ -1306,6 +1306,19 @@ export default function App() {
                 <option value="ALL">{language === "gu" ? "તમામ હોદ્દા" : "All Designations"}</option>
                 {uniqueDesignations.map(d => (
                   <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+
+              <select
+                value={selectedAppointment}
+                onChange={(e) => setSelectedAppointment(e.target.value)}
+                className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              >
+                <option value="ALL">{language === "gu" ? "તમામ નીમણૂંક (Appointments)" : "All Appointments"}</option>
+                <option value="CRIME">CRIME</option>
+                <option value="એટેચ">એટેચ (Attach)</option>
+                {uniqueAppointments.filter(app => app && app !== "CRIME" && app !== "એટેચ").map(app => (
+                  <option key={app} value={app}>{app}</option>
                 ))}
               </select>
             </div>
@@ -1658,6 +1671,13 @@ export default function App() {
                         <span className="text-amber-400 font-mono font-semibold">{p.retirementDate}</span>
                       </div>
                     </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400 font-medium">{language === "gu" ? "સેવા સમય:" : "Worked Tenure:"}</span>
+                      <span className="text-emerald-400 font-mono font-bold">
+                        ⏳ {getTenureText(p.reportDate || p.recruitedDate, language)}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between gap-2 mt-4 pt-3 border-t border-slate-800/80" onClick={(e) => e.stopPropagation()}>
@@ -1956,6 +1976,18 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400 font-semibold">{language === "gu" ? "કુલ સેવા સમય (Service Tenure)" : "Calculated Service Tenure"}</span>
+                    <span className="text-emerald-400 font-mono font-bold text-xs">
+                      ⏳ {getTenureText(selectedOfficer.reportDate || selectedOfficer.recruitedDate, language)}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    {language === "gu" ? "હાજર તારીખ / નીમણૂંકથી આજના દિવસ સુધી ગણતરી કરેલ" : "Calculated from appointment / reporting date until today"}
+                  </p>
+                </div>
+
                 {customColumns.length > 0 && (
                   <div className="pt-3 border-t border-slate-800">
                     <span className="text-[10px] text-amber-400 uppercase tracking-widest font-bold block mb-2">કસ્ટમ કૉલમ્સ</span>
@@ -2015,6 +2047,35 @@ export default function App() {
                 <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
               </div>
               <form onSubmit={handleSavePerson} className="p-6 space-y-4 overflow-y-auto flex-1">
+                {/* Admin Photo Upload & Edit Section */}
+                <div className="p-3 bg-slate-900 border border-slate-800 rounded-2xl flex flex-col sm:flex-row items-center gap-4">
+                  <img
+                    src={formData.avatarUrl || PRESET_AVATARS[0]}
+                    alt="Preview"
+                    className="w-16 h-16 rounded-2xl object-cover border-2 border-amber-500/60 shadow"
+                  />
+                  <div className="flex-1 w-full space-y-2">
+                    <label className="block text-xs font-semibold text-amber-400">
+                      {language === "gu" ? "ઓફિસર ફોટો અપલોડ / એડિટ (Photo Upload)" : "Officer Photo Upload / Edit"}
+                    </label>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                        className="text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
+                      />
+                      <input
+                        type="text"
+                        value={formData.avatarUrl}
+                        onChange={(e) => setFormData({ ...formData, avatarUrl: e.target.value })}
+                        placeholder={language === "gu" ? "અથવા ફોટો URL દાખલ કરો" : "Or enter photo URL"}
+                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-medium text-slate-400 mb-1">Sr No (અ.નં.)</label>
@@ -2108,7 +2169,9 @@ export default function App() {
               </div>
               <form onSubmit={handleAddCustomColumn} className="p-6 space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Column Name</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    {language === "gu" ? "નવી કૉલમનું નામ" : "New Column Name"}
+                  </label>
                   <input
                     type="text"
                     value={newColName}
@@ -2118,6 +2181,34 @@ export default function App() {
                     required
                   />
                 </div>
+
+                {/* Manage & Delete Specific Columns */}
+                {customColumns.length > 0 && (
+                  <div className="pt-2 border-t border-slate-800 space-y-2">
+                    <label className="block text-xs font-semibold text-amber-400">
+                      {language === "gu" ? "વિશેષ કૉલમ કાઢી નાખો (Delete Specific Column)" : "Delete Specific Custom Column"}
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {customColumns.map(col => (
+                        <div
+                          key={col}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 border border-slate-800 hover:border-rose-500/50 rounded-xl text-xs text-slate-200"
+                        >
+                          <span className="font-mono text-amber-300">{col}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCustomColumn(col)}
+                            className="p-1 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
+                            title={`Delete "${col}" column`}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex justify-end gap-3 pt-2">
                   <button type="button" onClick={() => setIsColModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 text-xs rounded-xl">Cancel</button>
                   <button type="submit" className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl">Add Column</button>
