@@ -1024,6 +1024,7 @@ export default function App() {
           const dutyPlace = cols[colOffset + 9] || code;
           const appointment = cols[colOffset + 10] || "CRIME";
           const reportDate = cols[colOffset + 11] || "01/01/2026";
+          const appointmentDate = reportDate;
           const birthDate = cols[colOffset + 12] || "01/06/1980";
           const recruitedDate = cols[colOffset + 13] || "01/01/2005";
           const retirementDate = cols[colOffset + 14] || "30/06/2040";
@@ -1051,6 +1052,7 @@ export default function App() {
             dutyPlace,
             appointment,
             reportDate,
+            appointmentDate,
             birthDate,
             recruitedDate,
             retirementDate,
