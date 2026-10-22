@@ -682,23 +682,27 @@ export default function App() {
     setIsModalOpen(false);
   };
 
-  // Robust Spreadsheet Import Parser with REAL Replace Support
+  // Robust Spreadsheet Import Parser with Exact Full Row Duplicate Matching & Replace Support
   const handleImportSpreadsheet = (e: React.FormEvent) => {
     e.preventDefault();
     if (!importText.trim()) return;
     try {
       const lines = importText.trim().split("\n");
-      // IF replaceData is selected, start from empty list!
       const newPersonnelList: Personnel[] = replaceData ? [] : [...personnel];
       let currentSrNo = newPersonnelList.length ? Math.max(...newPersonnelList.map(p => p.srNo || 0)) + 1 : 1;
       let importedCount = 0;
+      let duplicateCount = 0;
       let detectedCols = [...customColumns];
+
+      // Build existing full row signatures for exact duplicate matching
+      const existingSignatures = new Set(
+        newPersonnelList.map(p => `${p.code}|${p.designation}|${p.badgeNo}|${p.name}|${p.mobile}|${p.dutyPlace}|${p.appointment}|${p.reportDate}|${p.birthDate}|${p.recruitedDate}|${p.retirementDate}`)
+      );
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
 
-        // Check if header row contains additional custom columns
         if (i === 0 && (line.toLowerCase().includes("name") || line.includes("નામ") || line.includes("હોદ્દો") || line.toLowerCase().includes("code"))) {
           const headers = line.split(/[\t,|]+/).map(c => c.trim()).filter(Boolean);
           if (headers.length > 11) {
@@ -731,6 +735,13 @@ export default function App() {
           const birthDate = cols[colOffset + 8] || "01/06/1980";
           const recruitedDate = cols[colOffset + 9] || "01/01/2005";
           const retirementDate = cols[colOffset + 10] || "30/06/2040";
+
+          const rowSig = `${code}|${designation}|${badgeNo}|${name}|${mobile.replace(/\s+/g, '')}|${dutyPlace}|${appointment}|${reportDate}|${birthDate}|${recruitedDate}|${retirementDate}`;
+          if (existingSignatures.has(rowSig)) {
+            duplicateCount++;
+            continue;
+          }
+          existingSignatures.add(rowSig);
 
           const customFields: Record<string, string> = {};
           detectedCols.forEach((colName, cIdx) => {
@@ -769,8 +780,8 @@ export default function App() {
 
       showToast(
         language === "gu" 
-          ? `${importedCount} કર્મચારીઓ ${replaceData ? "(બદલીને)" : "(ઉમેરીને)"} સફળતાપૂર્વક ઇમ્પોર્ટ થયા!`
-          : `Successfully ${replaceData ? "replaced with" : "imported"} ${importedCount} records!`,
+          ? `${importedCount} કર્મચારીઓ સફળતાપૂર્વક ઇમ્પોર્ટ થયા (${duplicateCount} ડુપ્લિકેટ છોડ્યા).` 
+          : `Successfully imported ${importedCount} records (${duplicateCount} exact row duplicates skipped).`,
         "success"
       );
     } catch (err: any) {
@@ -826,6 +837,76 @@ export default function App() {
       setAiLoading(false);
     }
   };
+
+  function calculateServiceTenure(dateStr: string): string {
+    if (!dateStr) return "-";
+    let parts = dateStr.split(/[\/\-\.]/);
+    let d: Date;
+    if (parts.length === 3) {
+      if (parts[0].length === 4) {
+        d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      } else {
+        d = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+      }
+    } else {
+      d = new Date(dateStr);
+    }
+
+    if (isNaN(d.getTime())) return "-";
+
+    const now = new Date();
+    let years = now.getFullYear() - d.getFullYear();
+    let months = now.getMonth() - d.getMonth();
+    let days = now.getDate() - d.getDate();
+
+    if (days < 0) {
+      months--;
+      const prevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+      days += prevMonth.getDate();
+    }
+    if (months < 0) {
+      years--;
+      months += 12;
+    }
+
+    if (years < 0) return "0 days";
+
+    const partsArr = [];
+    if (years > 0) partsArr.push(`${years} years`);
+    if (months > 0) partsArr.push(`${months} months`);
+    if (days > 0 || partsArr.length === 0) partsArr.push(`${days} days`);
+    return partsArr.join(", ");
+  }
+
+  function getTenureText(dateStr: string, lang: "gu" | "en") {
+    const tenure = calculateServiceTenure(dateStr);
+    if (lang === "gu") {
+      return tenure
+        .replace(/years/g, "વર્ષ")
+        .replace(/year/g, "વર્ષ")
+        .replace(/months/g, "મહિના")
+        .replace(/month/g, "મહિનો")
+        .replace(/days/g, "દિવસ")
+        .replace(/day/g, "દિવસ");
+    }
+    return tenure;
+  }
+
+  const handleDeleteCustomColumn = (colNameToDelete: string) => {
+    if (customColumns.length <= 1) {
+      showToast(language === "gu" ? "કમ સે કમ એક કૉલમ હોવી જરૂરી છે." : "Keep at least one custom column.", "info");
+      return;
+    }
+    setCustomColumns(prev => prev.filter(c => c !== colNameToDelete));
+    setPersonnel(prev => prev.map(p => {
+      const updatedFields = { ...(p.customFields || {}) };
+      delete updatedFields[colNameToDelete];
+      return { ...p, customFields: updatedFields };
+    }));
+    showToast(language === "gu" ? `કૉલમ "${colNameToDelete}" દૂર કરવામાં આવી.` : `Column "${colNameToDelete}" deleted successfully.`, "success");
+  };
+
+  const uniqueAppointments = useMemo(() => Array.from(new Set(personnel.map(p => p.appointment).filter(Boolean))), [personnel]);
 
   // High-performance memoized filtering
   const filteredPersonnel = useMemo(() => {
