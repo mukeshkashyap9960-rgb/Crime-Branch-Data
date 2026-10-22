@@ -1,0 +1,6 @@
+{
+  "name": "Crime Branch Squad & Personnel Management System",
+  "description": "ગુજરાત ક્રાઇમ બ્રાન્ચ સ્ટાફ અને સ્કોડ મેનેજમેન્ટ સિસ્ટમ (Crime Branch Squad & Personnel Management System)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
