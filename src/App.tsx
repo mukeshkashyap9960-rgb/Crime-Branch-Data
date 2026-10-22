@@ -1884,6 +1884,19 @@ export default function App() {
                           <span className="text-slate-500">Retirement Date:</span>
                           <span className="font-mono text-amber-300 font-bold">{p.retirementDate}</span>
                         </div>
+                        {calculateServiceTenure(p.appointmentDate || p.reportDate) && (
+                          <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-between text-[11px] bg-slate-900/60 px-2.5 py-1.5 rounded-xl">
+                            <span className="text-slate-400 font-medium flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-amber-400" />
+                              <span>Worked Tenure:</span>
+                            </span>
+                            <span className="font-mono font-bold text-emerald-400">
+                              {language === "gu" 
+                                ? calculateServiceTenure(p.appointmentDate || p.reportDate)?.formattedGu 
+                                : calculateServiceTenure(p.appointmentDate || p.reportDate)?.formatted}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -2608,6 +2621,29 @@ export default function App() {
                       <span className="font-mono text-amber-400 font-bold">{selectedOfficer.retirementDate}</span>
                     </div>
                   </div>
+
+                  {calculateServiceTenure(selectedOfficer.appointmentDate || selectedOfficer.reportDate) && (
+                    <div className="mt-4 pt-3 border-t border-slate-800 bg-emerald-950/20 border border-emerald-500/30 rounded-2xl p-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-500/20 flex items-center justify-center text-emerald-400">
+                          <Clock className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wide block">
+                            {language === "gu" ? "કુલ સેવા સમય (Service Tenure)" : "Total Service Tenure"}
+                          </span>
+                          <span className="text-xs text-slate-300">
+                            {language === "gu" ? "નિમણૂક તારીખથી આજ સુધી" : "From appointment date to today"}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="font-mono font-black text-amber-300 text-sm px-3 py-1 bg-slate-900 rounded-xl border border-slate-800">
+                        {language === "gu" 
+                          ? calculateServiceTenure(selectedOfficer.appointmentDate || selectedOfficer.reportDate)?.formattedGu 
+                          : calculateServiceTenure(selectedOfficer.appointmentDate || selectedOfficer.reportDate)?.formatted}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2743,12 +2779,51 @@ export default function App() {
                     <input type="text" value={formData.reportDate} onChange={(e) => setFormData({ ...formData, reportDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
                   </div>
                   <div>
-                    <label className="block font-medium text-slate-400 mb-1">Birth Date</label>
-                    <input type="text" value={formData.birthDate} onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                    <label className="block font-medium text-slate-400 mb-1">Appointment Date (For Tenure)</label>
+                    <input type="text" value={formData.appointmentDate || formData.reportDate} onChange={(e) => setFormData({ ...formData, appointmentDate: e.target.value })} placeholder="DD/MM/YYYY" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
                   </div>
                   <div>
                     <label className="block font-medium text-amber-300 mb-1">Retirement Date</label>
                     <input type="text" value={formData.retirementDate} onChange={(e) => setFormData({ ...formData, retirementDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-bold" />
+                  </div>
+                </div>
+
+                {/* ADMIN PHOTO UPLOAD & EDIT SECTION */}
+                <div className="p-3.5 bg-slate-900/70 rounded-2xl border border-slate-800 space-y-3">
+                  <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">Officer Photo / Avatar Upload</span>
+                  <div className="flex items-center gap-4">
+                    <img 
+                      src={formData.avatarUrl || PRESET_AVATARS[0]} 
+                      alt="Preview" 
+                      className="w-14 h-14 rounded-2xl object-cover border-2 border-amber-500 shadow-md flex-shrink-0"
+                    />
+                    <div className="flex-1 space-y-2">
+                      <input 
+                        type="file" 
+                        ref={photoInputRef}
+                        onChange={handleFileUpload} 
+                        accept="image/*" 
+                        className="hidden" 
+                      />
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => photoInputRef.current?.click()}
+                          className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded-xl border border-amber-500/40 text-xs flex items-center gap-1.5 transition"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Upload Photo File</span>
+                        </button>
+                        <input 
+                          type="text" 
+                          value={formData.avatarUrl}
+                          onChange={(e) => setFormData({ ...formData, avatarUrl: e.target.value })}
+                          placeholder="Or paste image URL..."
+                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-slate-300 text-xs font-mono"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500">Supports JPG, PNG, WebP up to 3MB or direct image link.</p>
+                    </div>
                   </div>
                 </div>
 
