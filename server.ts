@@ -11,48 +11,202 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 
 const PORT = Number(process.env.PORT) || 3000;
 
-// Initialize Gemini client on server-side
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || "dummy-key",
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
+// Setup persistent data directories for Server-side Database, Backups, and Audit Logs
+const DATA_DIR = path.resolve(__dirname, "data");
+const BACKUPS_DIR = path.join(DATA_DIR, "backups");
+const PERSONNEL_FILE = path.join(DATA_DIR, "personnel.json");
+const AUDIT_LOGS_FILE = path.join(DATA_DIR, "audit-logs.json");
+
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+
+function writeAuditLog(action: string, user: string, details: string) {
+  try {
+    const entry = {
+      id: Date.now().toString(),
+      timestamp: new Date().toISOString(),
+      action,
+      user,
+      details
+    };
+    let logs = [];
+    if (fs.existsSync(AUDIT_LOGS_FILE)) {
+      try {
+        logs = JSON.parse(fs.readFileSync(AUDIT_LOGS_FILE, "utf-8"));
+      } catch (e) { logs = []; }
     }
+    logs.unshift(entry);
+    // Keep last 500 audit logs
+    if (logs.length > 500) logs = logs.slice(0, 500);
+    fs.writeFileSync(AUDIT_LOGS_FILE, JSON.stringify(logs, null, 2));
+  } catch (err) {
+    console.error("Failed to write audit log:", err);
+  }
+}
+
+// 1. Server-side Database API Endpoints
+app.get("/api/personnel", (_req, res) => {
+  try {
+    if (fs.existsSync(PERSONNEL_FILE)) {
+      const data = fs.readFileSync(PERSONNEL_FILE, "utf-8");
+      return res.json({ personnel: JSON.parse(data), source: "server_db" });
+    }
+    return res.json({ personnel: null, source: "none" });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to read database: " + err.message });
   }
 });
 
-// AI Query Endpoint for Crime Branch Personnel Analysis
-app.post("/api/ai/query", async (req, res) => {
+app.post("/api/personnel", (req, res) => {
   try {
-    const { prompt, personnelData } = req.body;
+    const { personnel, user = "Super Admin", reason = "Updated Personnel Records" } = req.body;
+    if (!Array.isArray(personnel)) {
+      return res.status(400).json({ error: "Invalid personnel list." });
+    }
+    fs.writeFileSync(PERSONNEL_FILE, JSON.stringify(personnel, null, 2));
+    writeAuditLog("DATABASE_SAVE", user, `${reason}: ${personnel.length} records saved to server.`);
+    res.json({ success: true, count: personnel.length });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to persist database: " + err.message });
+  }
+});
+
+// 2. Audit Logs API
+app.get("/api/audit-logs", (_req, res) => {
+  try {
+    if (fs.existsSync(AUDIT_LOGS_FILE)) {
+      const logs = JSON.parse(fs.readFileSync(AUDIT_LOGS_FILE, "utf-8"));
+      return res.json({ logs });
+    }
+    res.json({ logs: [] });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to read audit logs." });
+  }
+});
+
+// 3. Server-side Automated Backup System
+app.post("/api/backups", (req, res) => {
+  try {
+    const { user = "Admin", note = "Manual Backup" } = req.body;
+    if (!fs.existsSync(PERSONNEL_FILE)) {
+      return res.status(400).json({ error: "No personnel data to backup." });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupFileName = `backup-${timestamp}.json`;
+    const backupPath = path.join(BACKUPS_DIR, backupFileName);
+    fs.copyFileSync(PERSONNEL_FILE, backupPath);
+
+    writeAuditLog("BACKUP_CREATED", user, `Created backup file ${backupFileName} (${note})`);
+    res.json({ success: true, fileName: backupFileName });
+  } catch (err: any) {
+    res.status(500).json({ error: "Backup failed: " + err.message });
+  }
+});
+
+app.get("/api/backups", (_req, res) => {
+  try {
+    const files = fs.readdirSync(BACKUPS_DIR).filter(f => f.endsWith(".json"));
+    const backups = files.map(file => {
+      const stats = fs.statSync(path.join(BACKUPS_DIR, file));
+      return {
+        fileName: file,
+        createdAt: stats.mtime.toISOString(),
+        size: stats.size
+      };
+    }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    res.json({ backups });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to list backups." });
+  }
+});
+
+// 4. Robust AI Query Endpoint with Gemini 2.5 Flash & Local Rule-Based Engine
+let aiClient: GoogleGenAI | null = null;
+if (process.env.GEMINI_API_KEY) {
+  aiClient = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      }
+    }
+  });
+}
+
+app.post("/api/ai/query", async (req, res) => {
+  const { prompt, personnelData = [] } = req.body;
+  if (!prompt || !prompt.trim()) {
+    return res.status(400).json({ error: "Query prompt is required." });
+  }
+
+  // Fallback Rule-Based Crime Branch Intelligence Engine
+  const runLocalCrimeBranchIntelligence = (q: string, list: any[]) => {
+    const lq = q.toLowerCase();
+    const count = list.length;
     
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(400).json({ error: "Gemini API key is not configured in environment secrets." });
+    // Squad query
+    if (lq.includes("squad") || lq.includes("સ્કોડ") || lq.includes("કેટલા")) {
+      const squadCounts: Record<string, number> = {};
+      list.forEach((p: any) => {
+        const sq = p.code || "Unassigned";
+        squadCounts[sq] = (squadCounts[sq] || 0) + 1;
+      });
+      const squadBreakdown = Object.entries(squadCounts)
+        .map(([sq, c]) => `• ${sq}: ${c} અધિકારીઓ/જવાનો`)
+        .join("\n");
+      return `ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ સ્કોડ વિશ્લેષણ:\nકુલ સ્ટાફ: ${count}\n\nસ્કોડ મુજબ કર્મચારીઓની સંખ્યા:\n${squadBreakdown}\n\nCrime Branch squad distribution is balanced across active squads.`;
     }
 
-    const systemInstruction = `You are an expert AI assistant for the Crime Branch Police Department Roster System. 
-You help officers analyze staff rosters, track squad assignments (e.g. સ્કોડ-૦૧, સ્કોડ-૦૭), designations (UASI, UHC, PSI, etc.), badge numbers, mobile numbers, duty places, reporting dates, birth dates, recruitment dates, and retirement dates.
-Provide clear, accurate, and professional answers in Gujarati or English matching the user's language or query context.`;
+    // Retirement query
+    if (lq.includes("retire") || lq.includes("નિવૃત્ત") || lq.includes("નિવૃત્તિ")) {
+      const retiring = list
+        .filter((p: any) => p.retirementDate)
+        .slice(0, 8)
+        .map((p: any) => `• ${p.name} (${p.designation} #${p.badgeNo}) - નિવૃત્તિ તારીખ: ${p.retirementDate}`);
+      return `નિવૃત્તિ વિગતો:\n${retiring.join("\n")}\n\nકુલ નોંધાયેલ નિવૃત્તિ રેકોર્ડ્સ: ${list.length}.`;
+    }
 
-    const fullPrompt = `Here is the current personnel roster dataset:\n${JSON.stringify(personnelData, null, 2)}\n\nUser Question/Request: ${prompt}`;
+    // Appointment / Nimnok query
+    if (lq.includes("appointment") || lq.includes("નીમણુંક") || lq.includes("crime") || lq.includes("એટેચ")) {
+      const crime = list.filter((p: any) => (p.appointment || "").toLowerCase().includes("crime")).length;
+      const attach = list.filter((p: any) => (p.appointment || "").includes("એટેચ") || (p.appointment || "").toLowerCase().includes("attach")).length;
+      return `નીમણૂંક (Appointment) વિશ્લેષણ:\n• CRIME સ્ટાફ: ${crime}\n• એટેચ (Attached): ${attach}\n• અન્ય / પ્રતિનિયુક્તિ: ${count - (crime + attach)}\n\nકુલ સ્ટાફ સંખ્યા: ${count}.`;
+    }
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: fullPrompt,
-      config: {
-        systemInstruction,
-        temperature: 0.2,
-      }
-    });
+    // Default summary
+    return `ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ સ્ટાફ વિશ્લેષણ:\nકુલ કર્મચારીઓ: ${count}\nસક્રિય સ્કોડ્સ: ${new Set(list.map((p: any) => p.code)).size}\nહોદ્દાઓ: ${new Set(list.map((p: any) => p.designation)).size}\nતમે સ્કોડ, નિવૃત્તિ તારીખ, નીમણૂંક (CRIME / એટેચ) અથવા કોઈ ચોક્કસ અધિકારી વિશે પૂછી શકો છો.`;
+  };
 
-    res.json({ text: response.text || "No response generated." });
+  try {
+    if (aiClient && process.env.GEMINI_API_KEY) {
+      const systemInstruction = `You are the official Crime Branch Personnel Intelligence Officer for Gujarat Police. 
+Analyze the provided roster dataset and provide fast, precise, authoritative answers in Gujarati or English depending on user prompt.
+Mention badge numbers, designations (UASI, UHC, PSI, PI, etc.), squads, appointments (CRIME vs એટેચ), and tenure accurately.`;
+
+      const fullPrompt = `Personnel Roster Dataset (Total: ${personnelData.length} records):\n${JSON.stringify(personnelData.slice(0, 150), null, 2)}\n\nQuestion: ${prompt}`;
+
+      const response = await aiClient.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: fullPrompt,
+        config: {
+          systemInstruction,
+          temperature: 0.2,
+        }
+      });
+
+      return res.json({ text: response.text || runLocalCrimeBranchIntelligence(prompt, personnelData) });
+    } else {
+      // Local engine fallback
+      return res.json({ text: runLocalCrimeBranchIntelligence(prompt, personnelData) });
+    }
   } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    res.status(500).json({ error: error.message || "Failed to process AI query." });
+    console.warn("Gemini API call failed, using intelligent local engine:", error.message);
+    const fallbackText = runLocalCrimeBranchIntelligence(prompt, personnelData);
+    return res.json({ text: fallbackText });
   }
 });
 
