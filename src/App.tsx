@@ -543,52 +543,56 @@ export default function App() {
     );
   };
 
-  // Duplicate Records Counter
+  // Duplicate Records Counter - Matches exact full data row signature (name, badge, mobile, aadhar, pan, designation, code)
   const getDuplicateCount = () => {
-    const seenBadges = new Set<string>();
-    const seenMobiles = new Set<string>();
+    const seenSignatures = new Set<string>();
     let count = 0;
     for (const p of personnel) {
-      const badge = p.badgeNo.trim();
-      const mobile = p.mobile.replace(/\D/g, '').trim();
+      const sig = [
+        p.name?.trim().toLowerCase() || "",
+        p.badgeNo?.trim() || "",
+        p.mobile?.replace(/\D/g, '').trim() || "",
+        p.aadharNo?.replace(/\D/g, '').trim() || "",
+        p.panNo?.trim().toUpperCase() || "",
+        p.designation?.trim().toUpperCase() || "",
+        p.code?.trim() || ""
+      ].join("|");
 
-      const isBadgeDup = badge && seenBadges.has(badge);
-      const isMobileDup = mobile && mobile.length >= 10 && seenMobiles.has(mobile);
-
-      if (isBadgeDup || isMobileDup) {
+      if (seenSignatures.has(sig)) {
         count++;
       } else {
-        if (badge) seenBadges.add(badge);
-        if (mobile && mobile.length >= 10) seenMobiles.add(mobile);
+        seenSignatures.add(sig);
       }
     }
     return count;
   };
 
-  // Automatic Duplicate Deletion Tool
+  // Automatic Duplicate Deletion Tool - Matches exact full data row signature
   const handleAutoDeleteDuplicates = () => {
     if (currentUser?.role !== "admin") {
       setIsAdminUnlockModalOpen(true);
       return;
     }
 
-    const seenBadges = new Set<string>();
-    const seenMobiles = new Set<string>();
+    const seenSignatures = new Set<string>();
     const cleanList: Personnel[] = [];
     const removedList: Personnel[] = [];
 
     for (const p of personnel) {
-      const badge = p.badgeNo.trim();
-      const mobile = p.mobile.replace(/\D/g, '').trim();
+      const sig = [
+        p.name?.trim().toLowerCase() || "",
+        p.badgeNo?.trim() || "",
+        p.mobile?.replace(/\D/g, '').trim() || "",
+        p.aadharNo?.replace(/\D/g, '').trim() || "",
+        p.panNo?.trim().toUpperCase() || "",
+        p.designation?.trim().toUpperCase() || "",
+        p.code?.trim() || ""
+      ].join("|");
 
-      const isBadgeDup = badge && seenBadges.has(badge);
-      const isMobileDup = mobile && mobile.length >= 10 && seenMobiles.has(mobile);
-
-      if (isBadgeDup || isMobileDup) {
+      if (seenSignatures.has(sig)) {
         removedList.push(p);
       } else {
-        if (badge) seenBadges.add(badge);
-        if (mobile && mobile.length >= 10) seenMobiles.add(mobile);
+        seenSignatures.add(sig);
         cleanList.push(p);
       }
     }
