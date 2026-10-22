@@ -1007,28 +1007,67 @@ export default function App() {
         }
 
         const cols = line.split(/[\t,|]+/).map(c => c.trim()).filter(Boolean);
-        if (cols.length >= 4) {
+        if (cols.length >= 3) {
           let colOffset = 0;
-          if (!isNaN(Number(cols[0])) && cols[0].length <= 4 && cols.length > 5) {
+          if (!isNaN(Number(cols[0])) && Number(cols[0]) < 1000 && cols.length > 4) {
             colOffset = 1;
           }
 
-          const code = cols[colOffset] || "સ્કોડ-૦૧";
-          const designation = cols[colOffset + 1] || "UHC";
-          const badgeNo = cols[colOffset + 2] || String(Math.floor(1000 + Math.random() * 9000));
-          const name = cols[colOffset + 3] || "Officer " + currentSrNo;
-          const mobile = (cols[colOffset + 4] || "9876543210").replace(/\s+/g, '');
-          const aadharNo = cols[colOffset + 5] || "XXXX XXXX XXXX";
-          const panNo = cols[colOffset + 6] || "XXXXX0000X";
-          const bloodGroup = cols[colOffset + 7] || "B+";
-          const weaponNo = cols[colOffset + 8] || "WP-" + badgeNo;
-          const dutyPlace = cols[colOffset + 9] || code;
-          const appointment = cols[colOffset + 10] || "CRIME";
-          const reportDate = cols[colOffset + 11] || "01/01/2026";
+          // Smart token classification helper
+          const isDate = (val: string) => /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(val) || /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(val);
+          const isBloodGroup = (val: string) => /^(A|B|AB|O)[+-]$/i.test(val);
+          const isMobile = (val: string) => /^\d{10}$/.test(val.replace(/\D/g, ''));
+          const isAadhar = (val: string) => val.replace(/\D/g, '').length >= 10 && val.length >= 12;
+          const isPan = (val: string) => /^[A-Z]{5}\d{4}[A-Z]$/i.test(val);
+
+          let code = cols[colOffset] || "સ્કોડ-૦૧";
+          let designation = "UHC";
+          let badgeNo = String(Math.floor(1000 + Math.random() * 9000));
+          let name = "Officer " + currentSrNo;
+          let mobile = "9876543210";
+          let aadharNo = "XXXX XXXX XXXX";
+          let panNo = "BKAPG9941K";
+          let bloodGroup = "B+";
+          let weaponNo = "WP-" + badgeNo;
+          let dutyPlace = code;
+          let appointment = "CRIME";
+          let reportDate = "01/01/2026";
+          let birthDate = "01/06/1980";
+          let recruitedDate = "01/01/2005";
+          let retirementDate = "30/06/2040";
+
+          const remaining = cols.slice(colOffset);
+          const dates: string[] = [];
+          const others: string[] = [];
+
+          remaining.forEach(token => {
+            if (isDate(token)) {
+              dates.push(token);
+            } else if (isBloodGroup(token)) {
+              bloodGroup = token.toUpperCase();
+            } else if (isMobile(token)) {
+              mobile = token.replace(/\D/g, '');
+            } else if (isAadhar(token)) {
+              aadharNo = token;
+            } else if (isPan(token)) {
+              panNo = token.toUpperCase();
+            } else {
+              others.push(token);
+            }
+          });
+
+          if (others.length > 0) code = others[0];
+          if (others.length > 1) designation = others[1];
+          if (others.length > 2) badgeNo = others[2];
+          if (others.length > 3) name = others.slice(3, others.length > 5 ? others.length - 1 : others.length).join(" ");
+          if (others.length > 4) dutyPlace = others[others.length - 1];
+
+          if (dates.length > 0) reportDate = dates[0];
+          if (dates.length > 1) birthDate = dates[1];
+          if (dates.length > 2) recruitedDate = dates[2];
+          if (dates.length > 3) retirementDate = dates[3];
+
           const appointmentDate = reportDate;
-          const birthDate = cols[colOffset + 12] || "01/06/1980";
-          const recruitedDate = cols[colOffset + 13] || "01/01/2005";
-          const retirementDate = cols[colOffset + 14] || "30/06/2040";
 
           const customFields: Record<string, string> = {};
           detectedCols.forEach((colName, cIdx) => {
@@ -1058,7 +1097,7 @@ export default function App() {
             recruitedDate,
             retirementDate,
             avatarUrl: PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)],
-            notes: "Imported via spreadsheet.",
+            notes: "Imported via smart spreadsheet parser.",
             customFields
           };
           newPersonnelList.push(p);
