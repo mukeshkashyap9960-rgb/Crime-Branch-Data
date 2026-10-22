@@ -1008,35 +1008,72 @@ export default function App() {
 
         const cols = line.split(/[\t,|]+/).map(c => c.trim()).filter(Boolean);
         if (cols.length >= 3) {
-          let colOffset = 0;
-          // If first column is serial number (e.g. 1, 2, 3...)
-          if (!isNaN(Number(cols[0])) && Number(cols[0]) < 1000 && cols.length > 5) {
-            colOffset = 1;
+          // Helper pattern detectors
+          const isDate = (val: string) => /^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(val) || /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(val);
+          const isMobile = (val: string) => /^\d{10}$/.test(val.replace(/\D/g, ''));
+          const isAadhar = (val: string) => val.replace(/\D/g, '').length >= 10 && val.length >= 12;
+          const isPan = (val: string) => /^[A-Z]{5}\d{4}[A-Z]$/i.test(val);
+          const isBadgeOrSr = (val: string) => !isNaN(Number(val)) && Number(val) > 0 && Number(val) < 99999;
+
+          let code = "સ્કોડ-૦૧";
+          let designation = "UHC";
+          let badgeNo = String(Math.floor(1000 + Math.random() * 9000));
+          let name = "Officer " + currentSrNo;
+          let mobile = "9876543210";
+          let dutyPlace = "સ્કોડ-૦૧";
+          let appointment = "CRIME";
+          let reportDate = "01/01/2026";
+          let birthDate = "01/06/1980";
+          let recruitedDate = "01/01/2005";
+          let retirementDate = "30/06/2040";
+          let aadharNo = "XXXX XXXX XXXX";
+          let panNo = "BKAPG9941K";
+          let bloodGroup = "B+";
+          let weaponNo = "WP-" + badgeNo;
+
+          const dates: string[] = [];
+          const textTokens: string[] = [];
+
+          cols.forEach(token => {
+            if (isDate(token)) {
+              dates.push(token);
+            } else if (isMobile(token)) {
+              mobile = token.replace(/\D/g, '');
+            } else if (isAadhar(token)) {
+              aadharNo = token;
+            } else if (isPan(token)) {
+              panNo = token.toUpperCase();
+            } else {
+              textTokens.push(token);
+            }
+          });
+
+          // Filter out leading serial number if present
+          let cleanTokens = textTokens;
+          if (cleanTokens.length > 0 && !isNaN(Number(cleanTokens[0])) && Number(cleanTokens[0]) < 1000) {
+            cleanTokens = cleanTokens.slice(1);
           }
 
-          // Exact positional mapping matching user's requested order:
-          // 0: Code, 1: Designation, 2: Badge No, 3: Name, 4: Mobile, 5: Duty Place, 6: Appointment, 
-          // 7: Report Date, 8: Birth Date, 9: Recruitment Date, 10: Retirement Date, 11: Aadhar No, 12: PAN No
-          const code = cols[colOffset] || "સ્કોડ-૦૧";
-          const designation = cols[colOffset + 1] || "UHC";
-          const badgeNo = cols[colOffset + 2] || String(Math.floor(1000 + Math.random() * 9000));
-          const name = cols[colOffset + 3] || "Officer " + currentSrNo;
-          const mobile = (cols[colOffset + 4] || "9876543210").replace(/\D/g, '');
-          const dutyPlace = cols[colOffset + 5] || code;
-          const appointment = cols[colOffset + 6] || "CRIME";
-          const reportDate = cols[colOffset + 7] || "01/01/2026";
+          if (cleanTokens.length > 0) code = cleanTokens[0];
+          if (cleanTokens.length > 1) designation = cleanTokens[1];
+          if (cleanTokens.length > 2 && isBadgeOrSr(cleanTokens[2])) badgeNo = cleanTokens[2];
+          if (cleanTokens.length > 3) {
+            // Name might span multiple tokens (e.g. First Middle Last)
+            const nameTokensEnd = cleanTokens.length > 5 ? cleanTokens.length - 2 : cleanTokens.length - 1;
+            name = cleanTokens.slice(3, Math.max(4, nameTokensEnd)).join(" ");
+          }
+          if (cleanTokens.length > 4) dutyPlace = cleanTokens[cleanTokens.length - 1];
+
+          if (dates.length > 0) reportDate = dates[0];
+          if (dates.length > 1) birthDate = dates[1];
+          if (dates.length > 2) recruitedDate = dates[2];
+          if (dates.length > 3) retirementDate = dates[3];
+
           const appointmentDate = reportDate;
-          const birthDate = cols[colOffset + 8] || "01/06/1980";
-          const recruitedDate = cols[colOffset + 9] || "01/01/2005";
-          const retirementDate = cols[colOffset + 10] || "30/06/2040";
-          const aadharNo = cols[colOffset + 11] || "XXXX XXXX XXXX";
-          const panNo = cols[colOffset + 12] || "BKAPG9941K";
-          const bloodGroup = "B+";
-          const weaponNo = "WP-" + badgeNo;
 
           const customFields: Record<string, string> = {};
           detectedCols.forEach((colName, cIdx) => {
-            const val = cols[colOffset + 13 + cIdx];
+            const val = cols[13 + cIdx];
             if (val !== undefined) {
               customFields[colName] = val;
             }
@@ -1048,7 +1085,7 @@ export default function App() {
             code,
             designation,
             badgeNo,
-            name,
+            name: name || ("Officer " + currentSrNo),
             mobile,
             aadharNo,
             panNo,
@@ -1062,7 +1099,7 @@ export default function App() {
             recruitedDate,
             retirementDate,
             avatarUrl: PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)],
-            notes: "Imported via smart spreadsheet parser.",
+            notes: "Imported via smart pattern matching parser.",
             customFields
           };
           newPersonnelList.push(p);
