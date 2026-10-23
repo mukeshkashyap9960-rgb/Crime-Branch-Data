@@ -579,7 +579,14 @@ export async function updateUserRoleInSupabase(
 // ---------------------------------------------------------------------------
 // 5. SQL SCHEMA HELPER FOR USER
 // ---------------------------------------------------------------------------
-export const SUPABASE_SQL_SCHEMA = `-- Crime Branch Gujarat Police: Supabase Database Schema
+export const SUPABASE_SQL_SCHEMA = `-- Crime Branch Gujarat Police: Supabase Database Schema & Setup Instructions
+-- 1. Get your Supabase Project URL and Publishable / Anon Key from your Supabase Dashboard (Settings > API).
+-- 2. Set them in your server environment variables (.env):
+--    SUPABASE_URL=https://your-project.supabase.co
+--    SUPABASE_ANON_KEY=your-publishable-anon-key
+--    APINEX_API_KEY=your-apinex-api-key
+-- 3. Run the following SQL script in your Supabase SQL Editor:
+
 CREATE TABLE IF NOT EXISTS crime_branch_personnel (
   id TEXT PRIMARY KEY,
   sr_no INT,
@@ -640,6 +647,17 @@ CREATE TABLE IF NOT EXISTS app_users (
   device TEXT
 );
 
--- Enable Realtime publication for operational_broadcasts
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  sender_id TEXT,
+  sender_name TEXT,
+  sender_role TEXT,
+  message TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable Realtime publication for tables
 ALTER PUBLICATION supabase_realtime ADD TABLE operational_broadcasts;
+ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE crime_branch_personnel;
 `;
