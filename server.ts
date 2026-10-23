@@ -362,21 +362,34 @@ app.get("/api/backups", (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. Supabase Credentials Sync on Server (No LocalStorage)
+// 6. Supabase Credentials Sync on Server (Loaded directly from ENV Variables)
 // ---------------------------------------------------------------------------
-app.get("/api/supabase/config", (_req, res) => {
-  try {
-    let url = process.env.VITE_SUPABASE_URL || "";
-    let hasKey = Boolean(process.env.VITE_SUPABASE_ANON_KEY);
-    if (fs.existsSync(SUPABASE_CONFIG_FILE)) {
+function getEffectiveSupabaseCredentials() {
+  let url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
+  let anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+
+  if ((!url || !anonKey) && fs.existsSync(SUPABASE_CONFIG_FILE)) {
+    try {
       const saved = JSON.parse(fs.readFileSync(SUPABASE_CONFIG_FILE, "utf-8"));
-      if (saved.url) url = saved.url;
-      if (saved.anonKey) hasKey = true;
-    }
-    res.json({ url, hasKey, isConfigured: Boolean(url && hasKey) });
-  } catch (e) {
-    res.json({ url: "", hasKey: false, isConfigured: false });
+      if (!url && saved.url) url = saved.url;
+      if (!anonKey && saved.anonKey) anonKey = saved.anonKey;
+    } catch (e) {}
   }
+  return {
+    url: url.trim(),
+    anonKey: anonKey.trim(),
+    isConfigured: Boolean(url.trim() && anonKey.trim())
+  };
+}
+
+app.get("/api/supabase/credentials", (_req, res) => {
+  const creds = getEffectiveSupabaseCredentials();
+  res.json(creds);
+});
+
+app.get("/api/supabase/config", (_req, res) => {
+  const creds = getEffectiveSupabaseCredentials();
+  res.json({ url: creds.url, hasKey: Boolean(creds.anonKey), anonKey: creds.anonKey, isConfigured: creds.isConfigured });
 });
 
 app.post("/api/supabase/config", (req, res) => {
@@ -387,6 +400,20 @@ app.post("/api/supabase/config", (req, res) => {
       JSON.stringify({ url: url?.trim() || "", anonKey: anonKey?.trim() || "" }, null, 2)
     );
     writeAuditLog("SUPABASE_CONFIG_UPDATE", "Super Admin", `Updated Supabase connection endpoint: ${url}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/supabase/credentials", (req, res) => {
+  try {
+    const { url, anonKey } = req.body;
+    fs.writeFileSync(
+      SUPABASE_CONFIG_FILE,
+      JSON.stringify({ url: url?.trim() || "", anonKey: anonKey?.trim() || "" }, null, 2)
+    );
+    writeAuditLog("SUPABASE_CONFIG_UPDATE", "Super Admin", `Configured Supabase credentials: ${url}`);
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

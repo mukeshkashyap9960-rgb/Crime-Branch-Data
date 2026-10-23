@@ -19,7 +19,7 @@ export interface SquadTask {
   title: string;
   description: string;
   squadCode: string;
-  assignedOfficers: string[]; // names or badge numbers
+  assignedOfficers: string[];
   periodicity: "daily" | "weekly" | "monthly";
   priority: "urgent" | "high" | "normal";
   dueDate: string;
@@ -39,24 +39,64 @@ export interface AppUserRecord {
   device?: string;
 }
 
-// In-memory runtime configuration (NO localStorage / NO sessionStorage)
-let memorySupabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || "";
-let memorySupabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || "";
+// In-memory runtime configuration (ZERO localStorage / ZERO sessionStorage)
+let memorySupabaseUrl = "";
+let memorySupabaseAnonKey = "";
 let cachedClient: SupabaseClient | null = null;
 let realtimeChannel: any = null;
 
-export function configureSupabase(url: string, anonKey: string) {
-  memorySupabaseUrl = url.trim();
-  memorySupabaseAnonKey = anonKey.trim();
+// Track broadcast IDs that have already been received/notified to prevent repeat alerts
+const notifiedBroadcastIds = new Set<string>();
+
+export function configureSupabase(url: string, anonKey: string): SupabaseClient | null {
+  memorySupabaseUrl = (url || "").trim();
+  memorySupabaseAnonKey = (anonKey || "").trim();
   cachedClient = null;
+
   if (realtimeChannel) {
     try {
       realtimeChannel.unsubscribe();
-    } catch (e) {
-      /* ignore */
-    }
+    } catch (e) {}
     realtimeChannel = null;
   }
+
+  if (memorySupabaseUrl && memorySupabaseAnonKey) {
+    try {
+      cachedClient = createClient(memorySupabaseUrl, memorySupabaseAnonKey, {
+        auth: {
+          persistSession: false, // ZERO localStorage or sessionStorage
+          autoRefreshToken: false
+        },
+        realtime: {
+          params: {
+            eventsPerSecond: 10
+          }
+        }
+      });
+      return cachedClient;
+    } catch (err) {
+      console.warn("Failed to create Supabase client:", err);
+      return null;
+    }
+  }
+  return null;
+}
+
+// Always fetch Supabase URL and Anon Key directly from the server's ENV variables
+export async function initSupabaseFromServer(): Promise<{ url: string; anonKey: string; isConfigured: boolean }> {
+  try {
+    const res = await fetch("/api/supabase/credentials");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.url && data.anonKey) {
+        configureSupabase(data.url, data.anonKey);
+        return { url: data.url, anonKey: data.anonKey, isConfigured: true };
+      }
+    }
+  } catch (err) {
+    console.warn("Could not fetch Supabase credentials from server:", err);
+  }
+  return { url: memorySupabaseUrl, anonKey: memorySupabaseAnonKey, isConfigured: Boolean(memorySupabaseUrl && memorySupabaseAnonKey) };
 }
 
 export function getSupabaseConfig(): { url: string; hasKey: boolean; isConfigured: boolean } {
@@ -70,48 +110,35 @@ export function getSupabaseConfig(): { url: string; hasKey: boolean; isConfigure
 export function getSupabase(): SupabaseClient | null {
   if (cachedClient) return cachedClient;
   if (!memorySupabaseUrl || !memorySupabaseAnonKey) return null;
-  try {
-    cachedClient = createClient(memorySupabaseUrl, memorySupabaseAnonKey, {
-      auth: {
-        persistSession: false, // NO localStorage or sessionStorage!
-        autoRefreshToken: false
-      },
-      realtime: {
-        params: {
-          eventsPerSecond: 10
-        }
-      }
-    });
-    return cachedClient;
-  } catch (err) {
-    console.warn("Failed to initialize Supabase client:", err);
-    return null;
-  }
+  return configureSupabase(memorySupabaseUrl, memorySupabaseAnonKey);
 }
 
-// -------------------------------------------------------------
-// 1. REAL-TIME BROADCASTS (Supabase Realtime Channel + DB Sync)
-// -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 1. REAL-TIME BROADCASTS (Supabase Realtime Channel + Deduplicated Alerting)
+// ---------------------------------------------------------------------------
 export function subscribeToRealtimeBroadcasts(
   onBroadcastReceived: (broadcast: RealtimeBroadcast) => void
 ): () => void {
   const client = getSupabase();
+
   if (!client) {
-    // If Supabase credentials not set, fallback to server event polling
+    // Server polling fallback ONLY notifies when a brand new ID appears (NO spamming!)
     const interval = setInterval(async () => {
       try {
         const res = await fetch("/api/broadcasts");
         if (res.ok) {
           const data = await res.json();
-          if (Array.isArray(data.broadcasts) && data.broadcasts.length > 0) {
-            // notify latest
-            onBroadcastReceived(data.broadcasts[0]);
+          if (Array.isArray(data.broadcasts)) {
+            data.broadcasts.forEach((b: RealtimeBroadcast) => {
+              if (b && b.id && !notifiedBroadcastIds.has(b.id)) {
+                notifiedBroadcastIds.add(b.id);
+                onBroadcastReceived(b);
+              }
+            });
           }
         }
-      } catch (e) {
-        /* ignore */
-      }
-    }, 8000);
+      } catch (e) {}
+    }, 10000);
     return () => clearInterval(interval);
   }
 
@@ -120,7 +147,11 @@ export function subscribeToRealtimeBroadcasts(
       .channel("crime_branch_broadcasts")
       .on("broadcast", { event: "new_alert" }, (payload) => {
         if (payload?.payload) {
-          onBroadcastReceived(payload.payload as RealtimeBroadcast);
+          const b = payload.payload as RealtimeBroadcast;
+          if (b && b.id && !notifiedBroadcastIds.has(b.id)) {
+            notifiedBroadcastIds.add(b.id);
+            onBroadcastReceived(b);
+          }
         }
       })
       .on(
@@ -128,7 +159,21 @@ export function subscribeToRealtimeBroadcasts(
         { event: "INSERT", schema: "public", table: "operational_broadcasts" },
         (payload) => {
           if (payload?.new) {
-            onBroadcastReceived(payload.new as RealtimeBroadcast);
+            const raw = payload.new as any;
+            const b: RealtimeBroadcast = {
+              id: raw.id || String(Date.now()),
+              title: raw.title,
+              messageGu: raw.message_gu || raw.messageGu || "",
+              messageEn: raw.message_en || raw.messageEn || "",
+              priority: raw.priority || "normal",
+              author: raw.author || "Super Admin",
+              createdAt: raw.created_at || raw.createdAt || new Date().toISOString(),
+              active: raw.active !== false
+            };
+            if (!notifiedBroadcastIds.has(b.id)) {
+              notifiedBroadcastIds.add(b.id);
+              onBroadcastReceived(b);
+            }
           }
         }
       )
@@ -139,9 +184,7 @@ export function subscribeToRealtimeBroadcasts(
     return () => {
       try {
         client.removeChannel(channel);
-      } catch (e) {
-        /* ignore */
-      }
+      } catch (e) {}
     };
   } catch (err) {
     console.warn("Realtime channel subscription error:", err);
@@ -152,19 +195,21 @@ export function subscribeToRealtimeBroadcasts(
 export async function dispatchRealtimeBroadcast(
   broadcast: RealtimeBroadcast
 ): Promise<{ success: boolean; error?: string }> {
+  // Add to notified list immediately so dispatcher does not spam self
+  notifiedBroadcastIds.add(broadcast.id);
+
   const client = getSupabase();
-  
-  // 1. Send via Supabase if client exists
+
   if (client) {
     try {
-      // Send real-time broadcast message to all active tabs/devices
+      // 1. Broadcast to all active clients via Supabase Realtime channel
       await client.channel("crime_branch_broadcasts").send({
         type: "broadcast",
         event: "new_alert",
         payload: broadcast
       });
 
-      // Insert into Supabase table
+      // 2. Persist into Supabase table operational_broadcasts
       await client.from("operational_broadcasts").insert([
         {
           id: broadcast.id,
@@ -182,7 +227,7 @@ export async function dispatchRealtimeBroadcast(
     }
   }
 
-  // 2. Also sync to backend server for guaranteed persistence & fallback
+  // Also sync to server route for persistence
   try {
     const res = await fetch("/api/broadcasts", {
       method: "POST",
@@ -206,7 +251,7 @@ export async function fetchBroadcasts(): Promise<RealtimeBroadcast[]> {
         .limit(30);
 
       if (!error && Array.isArray(data) && data.length > 0) {
-        return data.map((b: any) => ({
+        const mapped = data.map((b: any) => ({
           id: b.id || String(b.created_at),
           title: b.title,
           messageGu: b.message_gu || b.messageGu || "",
@@ -216,6 +261,10 @@ export async function fetchBroadcasts(): Promise<RealtimeBroadcast[]> {
           createdAt: b.created_at || b.createdAt,
           active: b.active !== false
         }));
+
+        // Mark all existing broadcasts as seen on initial load so they don't trigger alert chime
+        mapped.forEach((b) => notifiedBroadcastIds.add(b.id));
+        return mapped;
       }
     } catch (e) {
       console.warn("Supabase fetch broadcasts error:", e);
@@ -227,17 +276,17 @@ export async function fetchBroadcasts(): Promise<RealtimeBroadcast[]> {
     const res = await fetch("/api/broadcasts");
     if (res.ok) {
       const json = await res.json();
-      return json.broadcasts || [];
+      const list = json.broadcasts || [];
+      list.forEach((b: any) => notifiedBroadcastIds.add(b.id));
+      return list;
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
   return [];
 }
 
-// -------------------------------------------------------------
-// 2. PERSONNEL ROSTER SYNC (Supabase-Only, No LocalStorage)
-// -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 2. PERSONNEL ROSTER (SAVED & LOADED FROM SUPABASE TABLES ONLY)
+// ---------------------------------------------------------------------------
 export async function syncPersonnelToSupabase(
   personnelList: Personnel[],
   user = "Super Admin"
@@ -246,7 +295,7 @@ export async function syncPersonnelToSupabase(
 
   if (client) {
     try {
-      // Upsert into Supabase table crime_branch_personnel
+      // Upsert full personnel payload with all fields: names, duty places, photos, appointments, dates
       const rows = personnelList.map((p) => ({
         id: p.id,
         sr_no: p.srNo,
@@ -266,20 +315,22 @@ export async function syncPersonnelToSupabase(
         blood_group: p.bloodGroup,
         weapon_no: p.weaponNo,
         avatar_url: p.avatarUrl,
-        notes: p.notes,
+        notes: p.notes || "",
         custom_fields: p.customFields || {}
       }));
 
       const { error } = await client.from("crime_branch_personnel").upsert(rows, { onConflict: "id" });
       if (!error) {
-        console.log(`Synced ${rows.length} records to Supabase`);
+        console.log(`Saved ${rows.length} personnel records into Supabase table 'crime_branch_personnel'`);
+      } else {
+        console.warn("Supabase upsert note:", error.message);
       }
     } catch (e: any) {
-      console.warn("Supabase personnel upsert error:", e?.message);
+      console.warn("Supabase personnel upsert exception:", e?.message);
     }
   }
 
-  // Always sync to server database as persistent cloud storage relay
+  // Backup sync to server relay
   try {
     const res = await fetch("/api/personnel", {
       method: "POST",
@@ -287,7 +338,7 @@ export async function syncPersonnelToSupabase(
       body: JSON.stringify({
         personnel: personnelList,
         user,
-        reason: "Synced to Supabase & Central DB"
+        reason: "Synced to Supabase table crime_branch_personnel"
       })
     });
     return { success: res.ok, count: personnelList.length };
@@ -330,7 +381,7 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
         }));
       }
     } catch (e) {
-      console.warn("Failed to load from Supabase:", e);
+      console.warn("Failed to load from Supabase table crime_branch_personnel:", e);
     }
   }
 
@@ -343,15 +394,13 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
         return json.personnel;
       }
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
   return null;
 }
 
-// -------------------------------------------------------------
-// 3. SQUAD TASKS (Daily, Weekly, Monthly)
-// -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 3. SQUAD TASKS (DAILY, WEEKLY, MONTHLY)
+// ---------------------------------------------------------------------------
 export async function fetchSquadTasks(): Promise<SquadTask[]> {
   const client = getSupabase();
   if (client) {
@@ -381,16 +430,13 @@ export async function fetchSquadTasks(): Promise<SquadTask[]> {
     }
   }
 
-  // Server route fallback
   try {
     const res = await fetch("/api/squad-tasks");
     if (res.ok) {
       const json = await res.json();
       return json.tasks || [];
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
   return [];
 }
 
@@ -433,9 +479,7 @@ export async function deleteSquadTask(taskId: string): Promise<{ success: boolea
   if (client) {
     try {
       await client.from("squad_tasks").delete().eq("id", taskId);
-    } catch (e) {
-      /* ignore */
-    }
+    } catch (e) {}
   }
 
   try {
@@ -446,9 +490,9 @@ export async function deleteSquadTask(taskId: string): Promise<{ success: boolea
   }
 }
 
-// -------------------------------------------------------------
-// 4. ACTIVE USERS & ROLE MANAGEMENT (Super Admin can change roles)
-// -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 4. ACTIVE USERS & ROLE MANAGEMENT
+// ---------------------------------------------------------------------------
 export async function fetchUsers(): Promise<AppUserRecord[]> {
   const client = getSupabase();
   if (client) {
@@ -477,9 +521,7 @@ export async function fetchUsers(): Promise<AppUserRecord[]> {
       const json = await res.json();
       return json.users || [];
     }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
   return [];
 }
 
@@ -497,9 +539,7 @@ export async function recordUserSession(user: AppUserRecord): Promise<void> {
         login_time: user.loginTime,
         device: user.device
       });
-    } catch (e) {
-      /* ignore */
-    }
+    } catch (e) {}
   }
 
   try {
@@ -508,9 +548,7 @@ export async function recordUserSession(user: AppUserRecord): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(user)
     });
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) {}
 }
 
 export async function updateUserRoleInSupabase(
@@ -538,9 +576,9 @@ export async function updateUserRoleInSupabase(
   }
 }
 
-// -------------------------------------------------------------
-// 5. SQL SCHEMA HELPER FOR USER (for manual Supabase SQL Editor if desired)
-// -------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 5. SQL SCHEMA HELPER FOR USER
+// ---------------------------------------------------------------------------
 export const SUPABASE_SQL_SCHEMA = `-- Crime Branch Gujarat Police: Supabase Database Schema
 CREATE TABLE IF NOT EXISTS crime_branch_personnel (
   id TEXT PRIMARY KEY,
@@ -602,6 +640,6 @@ CREATE TABLE IF NOT EXISTS app_users (
   device TEXT
 );
 
--- Enable Realtime publication
+-- Enable Realtime publication for operational_broadcasts
 ALTER PUBLICATION supabase_realtime ADD TABLE operational_broadcasts;
 `;

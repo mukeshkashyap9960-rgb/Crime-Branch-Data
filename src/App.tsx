@@ -18,6 +18,7 @@ import {
   RealtimeBroadcast,
   SquadTask,
   AppUserRecord,
+  initSupabaseFromServer,
   subscribeToRealtimeBroadcasts,
   dispatchRealtimeBroadcast,
   fetchBroadcasts,
@@ -375,6 +376,7 @@ export default function App() {
   const [selectedAppointment, setSelectedAppointment] = useState("ALL");
   const [selectedBloodGroup, setSelectedBloodGroup] = useState("ALL");
   const [selectedRetirementAlert, setSelectedRetirementAlert] = useState<"ALL" | "1YR" | "6MO" | "RETIRED">("ALL");
+  const [selectedTenureFilter, setSelectedTenureFilter] = useState<"ALL" | "1YR" | "2YR" | "3YR" | "4YR" | "5YR" | "6YR">("ALL");
   const [language, setLanguage] = useState<"gu" | "en">("gu");
 
   // Pagination for 60fps performance
@@ -430,6 +432,8 @@ export default function App() {
   const [isBroadcastModalOpen, setIsBroadcastModalOpen] = useState(false);
   const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState(false);
   const [soundAlertEnabled, setSoundAlertEnabled] = useState(true);
+  const [isAlertDismissed, setIsAlertDismissed] = useState(false);
+  const playedAlertIds = useRef<Set<string>>(new Set());
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastMsgGu, setBroadcastMsgGu] = useState("");
   const [broadcastMsgEn, setBroadcastMsgEn] = useState("");
@@ -510,46 +514,64 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // INITIAL DATA LOADING (SUPABASE SYNC ONLY)
+  // INITIAL DATA LOADING (SUPABASE SYNC ONLY - FETCHES ENV CREDENTIALS FIRST)
   // ---------------------------------------------------------------------------
   useEffect(() => {
     setIsLoadingData(true);
 
-    // 1. Load Personnel from Supabase
-    loadPersonnelFromSupabase()
-      .then((data) => {
+    // 1. Fetch Supabase URL and Anon Key directly from server ENV variables
+    initSupabaseFromServer().then(async (creds) => {
+      setSupabaseConnected(creds.isConfigured);
+      if (creds.url) setSupabaseUrlInput(creds.url);
+
+      // 2. Load Personnel from Supabase tables (names, duty places, photos, appointments, dates)
+      try {
+        const data = await loadPersonnelFromSupabase();
         if (data && Array.isArray(data) && data.length > 0) {
           setPersonnel(data);
+        } else if (creds.isConfigured) {
+          // If Supabase table is fresh/empty, seed initial personnel into Supabase
+          await syncPersonnelToSupabase(initialPersonnel, "Initial Database Population");
+          setPersonnel(initialPersonnel);
         }
-      })
-      .catch((err) => console.warn("Failed to load personnel:", err))
-      .finally(() => setIsLoadingData(false));
+      } catch (err) {
+        console.warn("Personnel load error:", err);
+      } finally {
+        setIsLoadingData(false);
+      }
 
-    // 2. Load Broadcasts from Supabase
-    fetchBroadcasts().then((bList) => {
-      setBroadcasts(bList);
-      if (bList.length > 0) setLatestAlert(bList[0]);
+      // 3. Load Broadcasts from Supabase
+      fetchBroadcasts().then((bList) => {
+        setBroadcasts(bList);
+        if (bList.length > 0) {
+          setLatestAlert(bList[0]);
+          // Mark all existing broadcasts as seen on load so audio alert does NOT fire on page boot
+          bList.forEach((b) => playedAlertIds.current.add(b.id));
+        }
+      });
+
+      // 4. Realtime Broadcast Channel Subscription (Alert sound plays ONCE per alert!)
+      const unsubBroadcasts = subscribeToRealtimeBroadcasts((incomingAlert) => {
+        setBroadcasts((prev) => [incomingAlert, ...prev.filter((b) => b.id !== incomingAlert.id)]);
+        setLatestAlert(incomingAlert);
+        setIsAlertDismissed(false);
+
+        // Deduplication: Play audio alert chime ONLY ONCE per unique alert ID!
+        if (!playedAlertIds.current.has(incomingAlert.id)) {
+          playedAlertIds.current.add(incomingAlert.id);
+          if (soundAlertEnabled) playBroadcastAlertSound();
+          showToast(`🚨 ${incomingAlert.title}`, "warning");
+        }
+      });
+
+      // 5. Load Squad Tasks and App Users from Supabase
+      fetchSquadTasks().then(setSquadTasks);
+      fetchUsers().then(setAppUsers);
+
+      return () => {
+        unsubBroadcasts();
+      };
     });
-
-    // 3. Realtime Broadcast Channel Subscription
-    const unsubBroadcasts = subscribeToRealtimeBroadcasts((incomingAlert) => {
-      setBroadcasts((prev) => [incomingAlert, ...prev.filter((b) => b.id !== incomingAlert.id)]);
-      setLatestAlert(incomingAlert);
-      if (soundAlertEnabled) playBroadcastAlertSound();
-      showToast(`🚨 ${incomingAlert.title}`, "warning");
-    });
-
-    // 4. Load Squad Tasks
-    fetchSquadTasks().then(setSquadTasks);
-
-    // 5. Load App Users & Check Supabase status
-    fetchUsers().then(setAppUsers);
-    const conf = getSupabaseConfig();
-    setSupabaseConnected(conf.isConfigured);
-
-    return () => {
-      unsubBroadcasts();
-    };
   }, []);
 
   // Fetch audit logs & backups
@@ -761,28 +783,18 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // SHARE OFFICER DETAILS (NATIVE SHARE OR CLIPBOARD FALLBACK)
+  // SHARE OFFICER DETAILS (STRICTLY ONLY: NAME, MOBILE NO., AND NAVRITI)
   // ---------------------------------------------------------------------------
   const handleShareOfficer = async (p: Personnel) => {
-    const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
-    const shareText = `👮 ગુજરાત પોલીસ - ક્રાઇમ બ્રાન્ચ (Gujarat Police - Crime Branch)
-━━━━━━━━━━━━━━━━━━━━
-• નામ: ${p.name}
-• હોદ્દો: ${p.designation} (${p.code})
-• બક્કલ નં: #${p.badgeNo}
-• મોબાઇલ: ${p.mobile}
-• ફરજની જગ્યા: ${p.dutyPlace}
-• નીમણૂંક: ${p.appointment}
-• હાજર તારીખ: ${p.reportDate || "-"}
-• નિવૃત્તિ તારીખ: ${p.retirementDate || "-"}
-• સેવા સમયગાળો: ${tenure ? tenure.formattedGu : "-"}
-• બ્લડ ગ્રુપ: ${p.bloodGroup || "B+"}
-━━━━━━━━━━━━━━━━━━━━`;
+    const navriti = p.retirementDate || "-";
+    const shareText = language === "gu"
+      ? `નામ: ${p.name}\nમોબાઇલ નંબર: ${p.mobile || "-"}\nનિવૃત્તિ તારીખ: ${navriti}`
+      : `Name: ${p.name}\nMobile No: ${p.mobile || "-"}\nRetirement Date: ${navriti}`;
 
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `${p.name} - Crime Branch Roster`,
+          title: `${p.name} - Details`,
           text: shareText
         });
         showToast(language === "gu" ? "✓ વિગત સફળતાપૂર્વક શેર કરી" : "✓ Details shared successfully", "success");
@@ -794,7 +806,7 @@ export default function App() {
 
     try {
       await navigator.clipboard.writeText(shareText);
-      showToast(language === "gu" ? "✓ વિગતો ક્લિપબોર્ડ પર કોપી થઈ ગઈ છે!" : "✓ Officer details copied to clipboard!", "success");
+      showToast(language === "gu" ? "✓ નામ, મોબાઇલ અને નિવૃત્તિ વિગત કોપી થઈ ગઈ!" : "✓ Name, Mobile & Retirement copied!", "success");
     } catch (err) {
       showToast("Failed to copy details", "error");
     }
@@ -1302,7 +1314,20 @@ export default function App() {
         }
       }
 
-      return matchesSearch && matchesSquad && matchesDesignation && matchesAppointment && matchesBlood && matchesRetirement;
+      // Feature: Filter who has completed 1, 2, 3, 4, 5, 6+ years worked
+      let matchesTenure = true;
+      if (selectedTenureFilter !== "ALL") {
+        const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
+        const yearsWorked = tenure ? tenure.years : 0;
+        if (selectedTenureFilter === "1YR") matchesTenure = yearsWorked >= 1;
+        else if (selectedTenureFilter === "2YR") matchesTenure = yearsWorked >= 2;
+        else if (selectedTenureFilter === "3YR") matchesTenure = yearsWorked >= 3;
+        else if (selectedTenureFilter === "4YR") matchesTenure = yearsWorked >= 4;
+        else if (selectedTenureFilter === "5YR") matchesTenure = yearsWorked >= 5;
+        else if (selectedTenureFilter === "6YR") matchesTenure = yearsWorked >= 6;
+      }
+
+      return matchesSearch && matchesSquad && matchesDesignation && matchesAppointment && matchesBlood && matchesRetirement && matchesTenure;
     });
 
     if (sortColumn) {
@@ -1330,7 +1355,7 @@ export default function App() {
     }
 
     return filtered;
-  }, [personnel, searchQuery, selectedSquad, selectedDesignation, selectedAppointment, selectedBloodGroup, selectedRetirementAlert, sortColumn, sortDirection]);
+  }, [personnel, searchQuery, selectedSquad, selectedDesignation, selectedAppointment, selectedBloodGroup, selectedRetirementAlert, selectedTenureFilter, sortColumn, sortDirection]);
 
   const totalPages = Math.ceil(filteredPersonnel.length / pageSize) || 1;
   const paginatedPersonnel = useMemo(() => {
@@ -1539,7 +1564,7 @@ export default function App() {
       {/* ------------------------------------------------------------------- */}
       {/* 1. REAL-TIME BROADCAST TOP TICKER / MARQUEE                         */}
       {/* ------------------------------------------------------------------- */}
-      {latestAlert && latestAlert.active && (
+      {latestAlert && latestAlert.active && !isAlertDismissed && (
         <div className="bg-gradient-to-r from-red-950 via-rose-900/95 to-red-950 border-b border-rose-500/40 px-2 min-[360px]:px-4 py-2 text-xs flex items-center justify-between gap-2 shadow-inner">
           <div className="flex items-center gap-2 min-w-0">
             <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
@@ -1579,6 +1604,13 @@ export default function App() {
                 + Broadcast
               </button>
             )}
+            <button
+              onClick={() => setIsAlertDismissed(true)}
+              className="p-1 rounded bg-slate-900/60 hover:bg-slate-800 text-slate-400 hover:text-white"
+              title="Dismiss Alert"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       )}
@@ -1995,8 +2027,8 @@ export default function App() {
             )}
           </div>
 
-          {/* FILTERS ROW */}
-          <div className="grid grid-cols-2 min-[480px]:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs">
+          {/* FILTERS ROW (SQUAD, DESIGNATION, APPOINTMENT, WORKED TENURE 1-6+ YRS, RETIREMENT) */}
+          <div className="grid grid-cols-2 min-[480px]:grid-cols-3 lg:grid-cols-5 gap-2 pt-2 border-t border-slate-800 text-xs">
             
             {/* Filter 1: Squad Filter */}
             <select
@@ -2034,15 +2066,30 @@ export default function App() {
               ))}
             </select>
 
-            {/* Filter 4: Retirement Alert Filter */}
+            {/* Filter 4: Worked Tenure (1, 2, 3, 4, 5, 6+ Years Worked) */}
+            <select
+              value={selectedTenureFilter}
+              onChange={(e) => { setSelectedTenureFilter(e.target.value as any); setCurrentPage(1); }}
+              className="bg-slate-950 border border-indigo-500/40 rounded-xl px-2.5 py-1.5 text-xs text-indigo-300 font-semibold focus:outline-none focus:border-indigo-400"
+            >
+              <option value="ALL">સેવા વર્ષ: All Service</option>
+              <option value="1YR">૧+ વર્ષ પૂર્ણ (1+ Yr Worked)</option>
+              <option value="2YR">૨+ વર્ષ પૂર્ણ (2+ Yrs Worked)</option>
+              <option value="3YR">૩+ વર્ષ પૂર્ણ (3+ Yrs Worked)</option>
+              <option value="4YR">૪+ વર્ષ પૂર્ણ (4+ Yrs Worked)</option>
+              <option value="5YR">૫+ વર્ષ પૂર્ણ (5+ Yrs Worked)</option>
+              <option value="6YR">૬+ વર્ષ પૂર્ણ (6+ Yrs Worked)</option>
+            </select>
+
+            {/* Filter 5: Retirement Alert Filter */}
             <select
               value={selectedRetirementAlert}
               onChange={(e) => { setSelectedRetirementAlert(e.target.value as any); setCurrentPage(1); }}
               className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 focus:outline-none focus:border-amber-500 font-semibold"
             >
               <option value="ALL">નિવૃત્તિ: All Roster</option>
-              <option value="6MO">Retiring within 6 Months</option>
-              <option value="1YR">Retiring within 1 Year</option>
+              <option value="6MO">Retiring in 6 Months</option>
+              <option value="1YR">Retiring in 1 Year</option>
               <option value="RETIRED">Already Retired</option>
             </select>
           </div>
