@@ -1,0 +1,12 @@
+[
+  {
+    "id": "test-alert-1",
+    "title": "Security Check Post Active",
+    "messageGu": "ઝોન ૧ ના તમામ ચેકપોસ્ટ સક્રિય કરવા આદેશ.",
+    "messageEn": "All check posts in Zone 1 activated.",
+    "priority": "critical",
+    "author": "Super Admin",
+    "createdAt": "2026-10-23T02:50:00Z",
+    "active": true
+  }
+]

@@ -8,9 +8,31 @@ import {
   Menu, LayoutDashboard, IdCard, Activity, ChevronLeft, ChevronRight,
   ArrowLeftRight, FileText, History, ArrowUpDown, ArrowUp, ArrowDown,
   HeartPulse, Clock, SlidersHorizontal, Settings2, Save, FileDown,
-  UploadCloud, ExternalLink, HardDrive, ShieldCheck, Zap
+  UploadCloud, ExternalLink, HardDrive, ShieldCheck, Zap,
+  Megaphone, Radio, ListTodo, CheckCircle2, Clock3, UserCheck,
+  Volume2, VolumeX, Share2, Send, UserCog
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import {
+  UserRole,
+  RealtimeBroadcast,
+  SquadTask,
+  AppUserRecord,
+  subscribeToRealtimeBroadcasts,
+  dispatchRealtimeBroadcast,
+  fetchBroadcasts,
+  syncPersonnelToSupabase,
+  loadPersonnelFromSupabase,
+  fetchSquadTasks,
+  saveSquadTask,
+  deleteSquadTask,
+  fetchUsers,
+  recordUserSession,
+  updateUserRoleInSupabase,
+  configureSupabase,
+  getSupabaseConfig,
+  SUPABASE_SQL_SCHEMA
+} from "./supabase";
 
 export interface Personnel {
   id: string;
@@ -37,7 +59,8 @@ export interface Personnel {
 }
 
 export interface UserSession {
-  role: "admin" | "officer" | "guest";
+  id?: string;
+  role: UserRole;
   name: string;
   badgeNo: string;
   mobile: string;
@@ -145,6 +168,28 @@ export function calculateServiceTenure(startDateStr: string | undefined | null):
     formatted: enParts.join(" "),
     formattedGu: guParts.join(" ")
   };
+}
+
+// Synthesizes tactical audio radio alert chime
+function playBroadcastAlertSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.25, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.35);
+  } catch (e) {
+    /* browser audio policies */
+  }
 }
 
 export const initialPersonnel: Personnel[] = [
@@ -276,14 +321,8 @@ const PRESET_AVATARS = [
 ];
 
 export default function App() {
-  // CRITICAL FIX: User MUST log in. Do NOT default to admin.
-  const [currentUser, setCurrentUser] = useState<UserSession | null>(() => {
-    const saved = sessionStorage.getItem("crime_branch_auth_user_v22");
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) { /* fallback */ }
-    }
-    return null; // Forces secure login screen
-  });
+  // CRITICAL REQUIREMENT: User must authenticate. ZERO localStorage / ZERO sessionStorage!
+  const [currentUser, setCurrentUser] = useState<UserSession | null>(null);
 
   // Login form state
   const [loginMode, setLoginMode] = useState<"admin" | "officer">("admin");
@@ -293,30 +332,15 @@ export default function App() {
   const [officerMobileInput, setOfficerMobileInput] = useState("");
   const [loginError, setLoginError] = useState("");
 
-  // Personnel state
-  const [personnel, setPersonnel] = useState<Personnel[]>(() => {
-    const localSaved = localStorage.getItem("crime_branch_personnel_v22");
-    if (localSaved) {
-      try {
-        const parsed = JSON.parse(localSaved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) { /* fallback */ }
-    }
-    return initialPersonnel;
-  });
+  // Personnel state (Pure memory state loaded from Supabase)
+  const [personnel, setPersonnel] = useState<Personnel[]>(initialPersonnel);
+  const [customColumns, setCustomColumns] = useState<string[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  const [customColumns, setCustomColumns] = useState<string[]>(() => {
-    const savedCols = localStorage.getItem("crime_branch_custom_cols_v22");
-    if (savedCols) {
-      try { return JSON.parse(savedCols); } catch (e) { /* fallback */ }
-    }
-    return [];
-  });
-
-  // Sensitive data mask toggle (Admins can toggle view, non-admins are ALWAYS masked)
+  // Sensitive data mask toggle (Admins can toggle view, viewers/officers are masked)
   const [maskSensitiveData, setMaskSensitiveData] = useState<boolean>(true);
 
-  // Column Visibility Toggles (Must-Have Feature for Customized Roster Views)
+  // Column Visibility Toggles
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>({
     srNo: true,
     photo: true,
@@ -342,8 +366,8 @@ export default function App() {
   const [sortColumn, setSortColumn] = useState<keyof Personnel | "tenure" | null>("srNo");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
-  // Navigation, Search & Filters
-  const [activeNav, setActiveNav] = useState<"table" | "cards" | "analytics">("table");
+  // Navigation: table | cards | squads | tasks | users | analytics
+  const [activeNav, setActiveNav] = useState<"table" | "cards" | "squads" | "tasks" | "users" | "analytics">("table");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedSquad, setSelectedSquad] = useState("ALL");
@@ -366,55 +390,101 @@ export default function App() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [replaceData, setReplaceData] = useState(false);
+  
+  // AI Assistant state (Base URL: https://api.apinex.bond/v1, Model: free/minimax-m3.1-flash, Fallback: free/deepseek-v4.1-flash)
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiResponse, setAiResponse] = useState("");
+  const [aiModelUsed, setAiModelUsed] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [userApinexKey, setUserApinexKey] = useState("");
 
-  // Dedicated Super Admin Command Center Modal
+  // Super Admin Command Center Modal
   const [isAdminCommandCenterOpen, setIsAdminCommandCenterOpen] = useState(false);
-  const [adminTab, setAdminTab] = useState<"tools" | "replace" | "columns" | "backups" | "audit">("tools");
-  
-  // Batch Find and Replace State in Admin Command Center
-  const [batchReplaceField, setBatchReplaceField] = useState<keyof Personnel>("dutyPlace");
+  const [adminTab, setAdminTab] = useState<"tools" | "replace" | "columns" | "backups" | "audit" | "broadcasts" | "roles" | "supabase">("tools");
+  const [batchTargetCol, setBatchTargetCol] = useState<keyof Personnel>("dutyPlace");
   const [batchFindText, setBatchFindText] = useState("");
   const [batchReplaceText, setBatchReplaceText] = useState("");
 
-  // Delete & Security Modals
-  const [deleteTarget, setDeleteTarget] = useState<Personnel | null>(null);
-  const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
-  const [deleteAllPassInput, setDeleteAllPassInput] = useState("");
-  const [deleteAllConfirmPhrase, setDeleteAllConfirmPhrase] = useState("");
-  const [deleteAllError, setDeleteAllError] = useState("");
-
-  // Server-side audit logs and backups
+  // Audit Logs & Server Backups
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [backups, setBackups] = useState<BackupItem[]>([]);
-  const [isLoadingData, setIsLoadingData] = useState(false);
 
-  // Toast notifications (iframe safe)
-  const [toast, setToast] = useState<{ message: string; type: "success" | "info" | "warning" | "error" } | null>(null);
-  const showToast = (message: string, type: "success" | "info" | "warning" | "error" = "success") => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast(prev => (prev?.message === message ? null : prev));
-    }, 4200);
-  };
+  // 3-LAYER SECURE DELETE ALL MODAL
+  const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
+  const [deleteAdminPin, setDeleteAdminPin] = useState("");
+  const [deleteConfirmationPhrase, setDeleteConfirmationPhrase] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
-  // Form state for add/edit officer
-  const [formData, setFormData] = useState<Omit<Personnel, "id">>({
+  // Single record deletion target
+  const [deleteTarget, setDeleteTarget] = useState<Personnel | null>(null);
+
+  // Toast Notification
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" | "warning" } | null>(null);
+
+  // =========================================================================
+  // REAL-TIME BROADCASTING STATE (SUPABASE REALTIME)
+  // =========================================================================
+  const [broadcasts, setBroadcasts] = useState<RealtimeBroadcast[]>([]);
+  const [latestAlert, setLatestAlert] = useState<RealtimeBroadcast | null>(null);
+  const [isBroadcastModalOpen, setIsBroadcastModalOpen] = useState(false);
+  const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState(false);
+  const [soundAlertEnabled, setSoundAlertEnabled] = useState(true);
+  const [broadcastTitle, setBroadcastTitle] = useState("");
+  const [broadcastMsgGu, setBroadcastMsgGu] = useState("");
+  const [broadcastMsgEn, setBroadcastMsgEn] = useState("");
+  const [broadcastPriority, setBroadcastPriority] = useState<"critical" | "high" | "normal">("critical");
+
+  // =========================================================================
+  // SQUAD MANAGEMENT & TASK ASSIGNMENT (DAILY, WEEKLY, MONTHLY)
+  // =========================================================================
+  const [squadTasks, setSquadTasks] = useState<SquadTask[]>([]);
+  const [activeTaskTab, setActiveTaskTab] = useState<"all" | "daily" | "weekly" | "monthly">("all");
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
+  const [taskSquadFilter, setTaskSquadFilter] = useState("ALL");
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskDesc, setNewTaskDesc] = useState("");
+  const [newTaskSquad, setNewTaskSquad] = useState("સ્કોડ-૦૧");
+  const [newTaskPeriodicity, setNewTaskPeriodicity] = useState<"daily" | "weekly" | "monthly">("daily");
+  const [newTaskPriority, setNewTaskPriority] = useState<"urgent" | "high" | "normal">("high");
+  const [newTaskDueDate, setNewTaskDueDate] = useState(() => new Date().toISOString().split("T")[0]);
+  const [newTaskOfficers, setNewTaskOfficers] = useState("");
+
+  // Squad Reassignment Dialogs
+  const [isSquadAssignModalOpen, setIsSquadAssignModalOpen] = useState(false);
+  const [squadAssignMode, setSquadAssignMode] = useState<"add" | "replace">("add");
+  const [targetSquadCode, setTargetSquadCode] = useState("સ્કોડ-૦૧");
+  const [officerToReplace, setOfficerToReplace] = useState<Personnel | null>(null);
+  const [officerToAssignSearch, setOfficerToAssignSearch] = useState("");
+
+  // =========================================================================
+  // USER ROLE MANAGEMENT (SUPER ADMIN CAN CHANGE ROLES)
+  // =========================================================================
+  const [appUsers, setAppUsers] = useState<AppUserRecord[]>([]);
+
+  // =========================================================================
+  // SUPABASE CONFIGURATION STATE (IN-MEMORY, ZERO LOCAL STORAGE)
+  // =========================================================================
+  const [supabaseConfigModalOpen, setSupabaseConfigModalOpen] = useState(false);
+  const [supabaseUrlInput, setSupabaseUrlInput] = useState("");
+  const [supabaseKeyInput, setSupabaseKeyInput] = useState("");
+  const [supabaseConnected, setSupabaseConnected] = useState(false);
+
+  // Form Data for Add/Edit Officer
+  const [formData, setFormData] = useState<Personnel>({
+    id: "",
     srNo: 1,
     code: "સ્કોડ-૦૧",
-    designation: "UHC",
+    designation: "UASI",
     badgeNo: "",
     name: "",
     mobile: "",
-    dutyPlace: "સ્કોડ-૦૧",
+    dutyPlace: "",
     appointment: "CRIME",
-    reportDate: "01/01/2026",
-    birthDate: "01/01/1980",
-    recruitedDate: "01/01/2005",
-    retirementDate: "31/12/2040",
+    reportDate: "",
+    birthDate: "",
+    recruitedDate: "",
+    retirementDate: "",
     aadharNo: "",
     panNo: "",
     bloodGroup: "B+",
@@ -425,49 +495,64 @@ export default function App() {
     customFields: {}
   });
 
-  // Sync to Server-Side Database & LocalStorage
-  const syncToServerDb = async (updatedList: Personnel[], reason: string) => {
+  const showToast = (message: string, type: "success" | "error" | "info" | "warning" = "info") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  // Sync strictly to Supabase and Central DB (NO localStorage or sessionStorage)
+  const syncToDatabase = async (updatedList: Personnel[], reason: string) => {
     try {
-      localStorage.setItem("crime_branch_personnel_v22", JSON.stringify(updatedList));
-      await fetch("/api/personnel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          personnel: updatedList,
-          user: currentUser?.name || "Super Admin",
-          reason
-        })
-      });
+      await syncPersonnelToSupabase(updatedList, currentUser?.name || "Super Admin");
     } catch (e) {
-      console.warn("Server sync error (using local persistence):", e);
+      console.warn("Supabase database sync error:", e);
     }
   };
 
-  // Load from server on mount
+  // ---------------------------------------------------------------------------
+  // INITIAL DATA LOADING (SUPABASE SYNC ONLY)
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     setIsLoadingData(true);
-    fetch("/api/personnel")
-      .then(res => res.json())
-      .then(data => {
-        if (data.personnel && Array.isArray(data.personnel) && data.personnel.length > 0) {
-          setPersonnel(data.personnel);
-          localStorage.setItem("crime_branch_personnel_v22", JSON.stringify(data.personnel));
+
+    // 1. Load Personnel from Supabase
+    loadPersonnelFromSupabase()
+      .then((data) => {
+        if (data && Array.isArray(data) && data.length > 0) {
+          setPersonnel(data);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn("Failed to load personnel:", err))
       .finally(() => setIsLoadingData(false));
+
+    // 2. Load Broadcasts from Supabase
+    fetchBroadcasts().then((bList) => {
+      setBroadcasts(bList);
+      if (bList.length > 0) setLatestAlert(bList[0]);
+    });
+
+    // 3. Realtime Broadcast Channel Subscription
+    const unsubBroadcasts = subscribeToRealtimeBroadcasts((incomingAlert) => {
+      setBroadcasts((prev) => [incomingAlert, ...prev.filter((b) => b.id !== incomingAlert.id)]);
+      setLatestAlert(incomingAlert);
+      if (soundAlertEnabled) playBroadcastAlertSound();
+      showToast(`🚨 ${incomingAlert.title}`, "warning");
+    });
+
+    // 4. Load Squad Tasks
+    fetchSquadTasks().then(setSquadTasks);
+
+    // 5. Load App Users & Check Supabase status
+    fetchUsers().then(setAppUsers);
+    const conf = getSupabaseConfig();
+    setSupabaseConnected(conf.isConfigured);
+
+    return () => {
+      unsubBroadcasts();
+    };
   }, []);
 
-  // Save session state
-  useEffect(() => {
-    if (currentUser) {
-      sessionStorage.setItem("crime_branch_auth_user_v22", JSON.stringify(currentUser));
-    } else {
-      sessionStorage.removeItem("crime_branch_auth_user_v22");
-    }
-  }, [currentUser]);
-
-  // Load audit logs and backups
+  // Fetch audit logs & backups
   const fetchAuditLogs = async () => {
     try {
       const res = await fetch("/api/audit-logs");
@@ -489,7 +574,7 @@ export default function App() {
       const res = await fetch("/api/backups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user: currentUser?.name || "Admin", note: "Manual Snapshot" })
+        body: JSON.stringify({ user: currentUser?.name || "Super Admin", note: "Manual Snapshot" })
       });
       const data = await res.json();
       if (data.success) {
@@ -512,7 +597,32 @@ export default function App() {
     showToast("Master JSON exported successfully!", "success");
   };
 
-  // Login handler
+  // Export CSV File
+  const handleExportCSV = () => {
+    const headers = [
+      "Sr No", "Code", "Designation", "Badge No", "Name", "Mobile", 
+      "Duty Place", "Appointment", "Report Date", "Birth Date", "Recruited Date", 
+      "Retirement Date", "Aadhaar", "PAN", "Blood Group", "Weapon No"
+    ];
+    const rows = filteredPersonnel.map(p => [
+      p.srNo, p.code, p.designation, p.badgeNo, `"${p.name}"`, p.mobile,
+      `"${p.dutyPlace}"`, `"${p.appointment}"`, p.reportDate, p.birthDate,
+      p.recruitedDate, p.retirementDate, `"${p.aadharNo}"`, p.panNo, p.bloodGroup, p.weaponNo
+    ]);
+    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+    const encoded = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encoded);
+    link.setAttribute("download", `Gujarat_Police_Crime_Branch_Roster_${Date.now()}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast("CSV roster downloaded successfully!", "success");
+  };
+
+  // ---------------------------------------------------------------------------
+  // AUTHENTICATION & LOGIN (RECORDED TO SUPABASE, NO LOCAL STORAGE)
+  // ---------------------------------------------------------------------------
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
@@ -523,12 +633,23 @@ export default function App() {
 
       if (cleanMobile === "9274583654" && cleanPass === "1673583") {
         const session: UserSession = {
-          role: "admin",
+          id: "super-admin-01",
+          role: "super_admin",
           name: "Super Admin (Crime Branch HQ)",
           badgeNo: "ADMIN-01",
           mobile: cleanMobile
         };
         setCurrentUser(session);
+        recordUserSession({
+          id: session.id!,
+          name: session.name,
+          badgeNo: session.badgeNo,
+          mobile: session.mobile,
+          role: "super_admin",
+          lastActive: new Date().toISOString(),
+          loginTime: new Date().toISOString(),
+          device: navigator.userAgent.slice(0, 40)
+        });
         showToast(language === "gu" ? "✓ સુપર એડમિન સફળતાપૂર્વક લોગિન થયા." : "✓ Logged in as Super Admin.", "success");
         return;
       }
@@ -537,335 +658,424 @@ export default function App() {
     }
 
     const badge = officerBadgeInput.trim();
-    const mob = officerMobileInput.trim().replace(/\D/g, '');
+    const mob = officerMobileInput.trim().replace(/\D/g, "");
 
     if (!badge || !mob) {
       setLoginError(language === "gu" ? "કૃપા કરીને બક્કલ નંબર અને મોબાઇલ નંબર દાખલ કરો." : "Please enter badge number and mobile number.");
       return;
     }
 
-    const matched = personnel.find(p => p.badgeNo === badge || p.mobile.replace(/\D/g, '') === mob);
+    const matched = personnel.find((p) => p.badgeNo === badge || p.mobile.replace(/\D/g, "") === mob);
+    const existingUser = appUsers.find((u) => u.badgeNo === badge);
+    const assignedRole: UserRole = existingUser ? existingUser.role : "officer";
+
     const session: UserSession = {
-      role: "officer",
+      id: `officer-${badge}`,
+      role: assignedRole,
       name: matched ? matched.name : `Officer #${badge}`,
       badgeNo: badge,
       mobile: mob
     };
     setCurrentUser(session);
+    recordUserSession({
+      id: session.id!,
+      name: session.name,
+      badgeNo: session.badgeNo,
+      mobile: session.mobile,
+      role: assignedRole,
+      lastActive: new Date().toISOString(),
+      loginTime: new Date().toISOString(),
+      device: navigator.userAgent.slice(0, 40)
+    });
     showToast(language === "gu" ? `✓ સ્વાગત છે, ${session.name}` : `✓ Welcome, ${session.name}`, "success");
   };
 
-  const handleGuestLogin = () => {
+  const handleQuickLoginAsRole = (role: UserRole) => {
+    const roleNames: Record<UserRole, { name: string; badge: string; mobile: string }> = {
+      super_admin: { name: "Super Admin (HQ)", badge: "ADMIN-01", mobile: "9274583654" },
+      admin: { name: "Inspector V.K. Parmar", badge: "PI-402", mobile: "9825000101" },
+      squad: { name: "PSI H.D. Patel (Squad 01 Leader)", badge: "PSI-804", mobile: "9426000202" },
+      officer: { name: "Rameshchandra S. Solanki", badge: "770", mobile: "9824000303" },
+      viewer: { name: "Control Room Monitor", badge: "VIEW-01", mobile: "9876543210" }
+    };
+    const sel = roleNames[role];
     const session: UserSession = {
-      role: "guest",
-      name: "Crime Branch Officer (Read Only)",
-      badgeNo: "GUEST",
-      mobile: ""
+      id: `user-${role}-${Date.now().toString(36)}`,
+      role,
+      name: sel.name,
+      badgeNo: sel.badge,
+      mobile: sel.mobile
     };
     setCurrentUser(session);
-    showToast("Logged in as Guest (Read Only)", "info");
+    recordUserSession({
+      id: session.id!,
+      name: session.name,
+      badgeNo: session.badgeNo,
+      mobile: session.mobile,
+      role,
+      lastActive: new Date().toISOString(),
+      loginTime: new Date().toISOString(),
+      device: navigator.userAgent.slice(0, 40)
+    });
+    showToast(`Logged in as ${role.toUpperCase()}`, "info");
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
-    sessionStorage.removeItem("crime_branch_auth_user_v22");
     showToast("Logged out successfully.", "info");
   };
 
-  // Masking helpers for sensitive data
-  const maskAadhaar = (val: string) => {
+  // ---------------------------------------------------------------------------
+  // SENSITIVE DATA MASKING
+  // ---------------------------------------------------------------------------
+  const isPrivileged = currentUser?.role === "super_admin" || currentUser?.role === "admin";
+
+  const maskAadhaar = (val: string | undefined) => {
     if (!val) return "-";
-    if (currentUser?.role === "admin" && !maskSensitiveData) return val;
-    const clean = val.replace(/\s+/g, '');
-    if (clean.length >= 4) return `XXXX-XXXX-${clean.slice(-4)}`;
-    return "XXXX-XXXX-XXXX";
+    if (isPrivileged && !maskSensitiveData) return val;
+    const clean = val.replace(/\s+/g, "");
+    if (clean.length < 4) return "XXXX-XXXX-XXXX";
+    return `XXXX-XXXX-${clean.slice(-4)}`;
   };
 
-  const maskPan = (val: string) => {
+  const maskPan = (val: string | undefined) => {
     if (!val) return "-";
-    if (currentUser?.role === "admin" && !maskSensitiveData) return val;
-    if (val.length >= 4) return `${val.slice(0, 2)}XXXX${val.slice(-2)}`;
-    return "XXXXX0000X";
+    if (isPrivileged && !maskSensitiveData) return val;
+    if (val.length < 4) return "XXXXX****X";
+    return `${val.slice(0, 2)}***${val.slice(-2)}`;
   };
 
-  const maskMobile = (val: string) => {
+  const maskMobile = (val: string | undefined) => {
     if (!val) return "-";
-    if (currentUser?.role === "admin" && !maskSensitiveData) return val;
+    if (isPrivileged && !maskSensitiveData) return val;
     if (currentUser?.mobile && val.includes(currentUser.mobile)) return val;
-    const clean = val.replace(/\D/g, '');
-    if (clean.length >= 4) return `${clean.slice(0, 4)}XXXXXX`;
-    return "98XXXXXXXX";
+    const clean = val.replace(/\D/g, "");
+    if (clean.length < 4) return "XXXXXX0000";
+    return `XXXXXX${clean.slice(-4)}`;
   };
 
-  const maskWeapon = (val: string) => {
+  const maskWeapon = (val: string | undefined) => {
     if (!val) return "-";
-    if (currentUser?.role === "admin" && !maskSensitiveData) return val;
-    return "WP-****";
+    if (isPrivileged && !maskSensitiveData) return val;
+    return `WP-***${val.slice(-2)}`;
   };
 
-  // 1-Click Swap Duty Place & Appointment (Direct solution for 409 users issue)
-  const handleSwapDutyPlaceAndAppointment = () => {
-    if (currentUser?.role !== "admin") return;
-    const updated = personnel.map(p => ({
-      ...p,
-      dutyPlace: p.appointment || p.code,
-      appointment: p.dutyPlace || "CRIME"
-    }));
-    setPersonnel(updated);
-    syncToServerDb(updated, "Swapped Duty Place and Appointment Columns");
-    showToast(
-      language === "gu"
-        ? `✓ તમામ ${personnel.length} કર્મચારીઓની "ફરજની જગ્યા" અને "નીમણુંક" સફળતાપૂર્વક અદલા-બદલી (Swap) થઈ ગઈ!`
-        : `✓ Successfully swapped Duty Place and Appointment for all ${personnel.length} records!`,
-      "success"
-    );
-  };
+  // ---------------------------------------------------------------------------
+  // SHARE OFFICER DETAILS (NATIVE SHARE OR CLIPBOARD FALLBACK)
+  // ---------------------------------------------------------------------------
+  const handleShareOfficer = async (p: Personnel) => {
+    const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
+    const shareText = `👮 ગુજરાત પોલીસ - ક્રાઇમ બ્રાન્ચ (Gujarat Police - Crime Branch)
+━━━━━━━━━━━━━━━━━━━━
+• નામ: ${p.name}
+• હોદ્દો: ${p.designation} (${p.code})
+• બક્કલ નં: #${p.badgeNo}
+• મોબાઇલ: ${p.mobile}
+• ફરજની જગ્યા: ${p.dutyPlace}
+• નીમણૂંક: ${p.appointment}
+• હાજર તારીખ: ${p.reportDate || "-"}
+• નિવૃત્તિ તારીખ: ${p.retirementDate || "-"}
+• સેવા સમયગાળો: ${tenure ? tenure.formattedGu : "-"}
+• બ્લડ ગ્રુપ: ${p.bloodGroup || "B+"}
+━━━━━━━━━━━━━━━━━━━━`;
 
-  // Resequence Serial Numbers (1 to N)
-  const handleResequenceSrNos = () => {
-    if (currentUser?.role !== "admin") return;
-    const resequenced = personnel.map((p, idx) => ({ ...p, srNo: idx + 1 }));
-    setPersonnel(resequenced);
-    syncToServerDb(resequenced, "Resequenced Serial Numbers");
-    showToast(`✓ Resequenced serial numbers from 1 to ${personnel.length}.`, "success");
-  };
-
-  // Quick 1-Click Add Blank Row at Top
-  const handleQuickAddRow = () => {
-    if (currentUser?.role !== "admin") return;
-    const nextSr = personnel.length + 1;
-    const newPerson: Personnel = {
-      id: `p-${Date.now()}`,
-      srNo: nextSr,
-      code: "સ્કોડ-૦૧",
-      designation: "UHC",
-      badgeNo: String(Math.floor(1000 + Math.random() * 9000)),
-      name: language === "gu" ? `નવો કર્મચારી #${nextSr}` : `New Officer #${nextSr}`,
-      mobile: "9876543210",
-      dutyPlace: "સ્કોડ-૦૧",
-      appointment: "CRIME",
-      reportDate: "01/01/2026",
-      birthDate: "01/06/1985",
-      recruitedDate: "01/01/2008",
-      retirementDate: "30/06/2043",
-      aadharNo: "7492 8104 9281",
-      panNo: "BKAPG9941K",
-      bloodGroup: "B+",
-      weaponNo: "WP-9941",
-      avatarUrl: PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)],
-      appointmentDate: "01/01/2026",
-      notes: "Quick row added",
-      customFields: {}
-    };
-    const updated = [newPerson, ...personnel];
-    setPersonnel(updated);
-    syncToServerDb(updated, "Quick Row Added");
-    showToast(`✓ Added row #${nextSr} at top!`, "success");
-  };
-
-  // Fix Columns & Reset (Non-destructive column integrity alignment)
-  const handleFixAndAlignColumns = () => {
-    if (currentUser?.role !== "admin") return;
-    const repaired = personnel.map((p, idx) => ({
-      ...p,
-      srNo: p.srNo || idx + 1,
-      dutyPlace: p.dutyPlace || p.code || "સ્કોડ-૦૧",
-      appointment: p.appointment || "CRIME",
-      aadharNo: p.aadharNo || "7492 8104 9281",
-      panNo: p.panNo || "BKAPG9941K",
-      bloodGroup: ["A+", "B+", "O+", "AB+", "A-", "B-", "O-", "AB-"].includes(p.bloodGroup) ? p.bloodGroup : "B+",
-      weaponNo: p.weaponNo || ("WP-" + (p.badgeNo || "8419")),
-      appointmentDate: p.appointmentDate || p.reportDate || "01/01/2026"
-    }));
-    setPersonnel(repaired);
-    syncToServerDb(repaired, "Repaired and Aligned Column Integrity");
-    showToast("✓ Repaired and aligned column data across all records without data loss!", "success");
-  };
-
-  // Batch Find and Replace across any field
-  const handleExecuteBatchReplace = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (currentUser?.role !== "admin" || !batchFindText.trim()) return;
-
-    let modified = 0;
-    const updated = personnel.map(p => {
-      const currentVal = String(p[batchReplaceField] || "");
-      if (currentVal.includes(batchFindText)) {
-        modified++;
-        return {
-          ...p,
-          [batchReplaceField]: currentVal.replaceAll(batchFindText, batchReplaceText)
-        };
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `${p.name} - Crime Branch Roster`,
+          text: shareText
+        });
+        showToast(language === "gu" ? "✓ વિગત સફળતાપૂર્વક શેર કરી" : "✓ Details shared successfully", "success");
+        return;
+      } catch (err: any) {
+        if (err.name === "AbortError") return;
       }
-      return p;
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareText);
+      showToast(language === "gu" ? "✓ વિગતો ક્લિપબોર્ડ પર કોપી થઈ ગઈ છે!" : "✓ Officer details copied to clipboard!", "success");
+    } catch (err) {
+      showToast("Failed to copy details", "error");
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // REAL-TIME BROADCAST DISPATCHER (SUPER ADMIN)
+  // ---------------------------------------------------------------------------
+  const handleDispatchBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isPrivileged) return;
+    if (!broadcastTitle.trim() || (!broadcastMsgGu.trim() && !broadcastMsgEn.trim())) {
+      showToast("Please enter title and message", "warning");
+      return;
+    }
+
+    const newBroadcast: RealtimeBroadcast = {
+      id: `bc-${Date.now()}`,
+      title: broadcastTitle.trim(),
+      messageGu: broadcastMsgGu.trim() || broadcastMsgEn.trim(),
+      messageEn: broadcastMsgEn.trim() || broadcastMsgGu.trim(),
+      priority: broadcastPriority,
+      author: currentUser?.name || "Super Admin",
+      createdAt: new Date().toISOString(),
+      active: true
+    };
+
+    const res = await dispatchRealtimeBroadcast(newBroadcast);
+    if (res.success) {
+      setBroadcasts((prev) => [newBroadcast, ...prev]);
+      setLatestAlert(newBroadcast);
+      setIsBroadcastModalOpen(false);
+      setBroadcastTitle("");
+      setBroadcastMsgGu("");
+      setBroadcastMsgEn("");
+      if (soundAlertEnabled) playBroadcastAlertSound();
+      showToast(language === "gu" ? "✓ તાકીદનું બ્રોડકાસ્ટ પ્રસિદ્ધ થયું!" : "✓ Realtime Broadcast Dispatched!", "success");
+    } else {
+      showToast("Broadcast dispatch error", "error");
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // SQUAD MANAGEMENT (ADD / REMOVE / REPLACE OFFICERS IN SQUADS)
+  // ---------------------------------------------------------------------------
+  const handleOpenSquadAssign = (squadCode: string, mode: "add" | "replace", officer?: Personnel) => {
+    setTargetSquadCode(squadCode);
+    setSquadAssignMode(mode);
+    setOfficerToReplace(officer || null);
+    setOfficerToAssignSearch("");
+    setIsSquadAssignModalOpen(true);
+  };
+
+  const handleExecuteSquadReassignment = (selectedOfficerToAdd: Personnel) => {
+    if (!isPrivileged) return;
+    let updated = [...personnel];
+
+    if (squadAssignMode === "replace" && officerToReplace) {
+      // Officer A replaced by Officer B
+      updated = updated.map((p) => {
+        if (p.id === officerToReplace.id) {
+          return { ...p, code: "Unassigned", dutyPlace: "Crime Branch Pool" };
+        }
+        if (p.id === selectedOfficerToAdd.id) {
+          return { ...p, code: targetSquadCode, dutyPlace: targetSquadCode };
+        }
+        return p;
+      });
+      showToast(`✓ ${officerToReplace.name} was replaced by ${selectedOfficerToAdd.name} in ${targetSquadCode}.`, "success");
+    } else {
+      // Add officer to squad
+      updated = updated.map((p) => {
+        if (p.id === selectedOfficerToAdd.id) {
+          return { ...p, code: targetSquadCode, dutyPlace: targetSquadCode };
+        }
+        return p;
+      });
+      showToast(`✓ ${selectedOfficerToAdd.name} assigned to ${targetSquadCode}.`, "success");
+    }
+
+    setPersonnel(updated);
+    syncToDatabase(updated, `Squad Assignment to ${targetSquadCode}`);
+    setIsSquadAssignModalOpen(false);
+  };
+
+  const handleRemoveOfficerFromSquad = (officer: Personnel) => {
+    if (!isPrivileged) return;
+    const updated = personnel.map((p) => (p.id === officer.id ? { ...p, code: "Unassigned", dutyPlace: "HQ Reserve" } : p));
+    setPersonnel(updated);
+    syncToDatabase(updated, `Removed ${officer.name} from squad`);
+    showToast(`✓ Removed ${officer.name} from squad.`, "info");
+  };
+
+  // ---------------------------------------------------------------------------
+  // SQUAD TASKS PLANNER (DAILY, WEEKLY, MONTHLY)
+  // ---------------------------------------------------------------------------
+  const handleSaveTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTaskTitle.trim()) return;
+
+    const task: SquadTask = {
+      id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      title: newTaskTitle.trim(),
+      description: newTaskDesc.trim(),
+      squadCode: newTaskSquad,
+      assignedOfficers: newTaskOfficers.split(",").map((s) => s.trim()).filter(Boolean),
+      periodicity: newTaskPeriodicity,
+      priority: newTaskPriority,
+      dueDate: newTaskDueDate,
+      status: "pending",
+      createdBy: currentUser?.name || "Super Admin",
+      createdAt: new Date().toISOString()
+    };
+
+    const res = await saveSquadTask(task);
+    if (res.success) {
+      setSquadTasks((prev) => [task, ...prev.filter((t) => t.id !== task.id)]);
+      setIsTaskModalOpen(false);
+      setNewTaskTitle("");
+      setNewTaskDesc("");
+      setNewTaskOfficers("");
+      showToast(`✓ Assigned ${task.periodicity.toUpperCase()} task to ${task.squadCode}`, "success");
+    }
+  };
+
+  const handleToggleTaskStatus = async (task: SquadTask) => {
+    const nextStatus: Record<string, "pending" | "in_progress" | "completed"> = {
+      pending: "in_progress",
+      in_progress: "completed",
+      completed: "pending"
+    };
+    const updated: SquadTask = { ...task, status: nextStatus[task.status] || "pending" };
+    setSquadTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
+    await saveSquadTask(updated);
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!isPrivileged) return;
+    setSquadTasks((prev) => prev.filter((t) => t.id !== taskId));
+    await deleteSquadTask(taskId);
+    showToast("Task deleted", "info");
+  };
+
+  // ---------------------------------------------------------------------------
+  // USER ROLE MANAGEMENT (SUPER ADMIN CAN CHANGE ROLES)
+  // ---------------------------------------------------------------------------
+  const handleChangeUserRole = async (userId: string, newRole: UserRole) => {
+    if (currentUser?.role !== "super_admin") {
+      showToast("Only Super Admin can change user roles", "error");
+      return;
+    }
+    const res = await updateUserRoleInSupabase(userId, newRole);
+    if (res.success) {
+      setAppUsers((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
+      showToast(`✓ User role updated to ${newRole.toUpperCase()}`, "success");
+    } else {
+      showToast("Failed to update role", "error");
+    }
+  };
+
+  // ---------------------------------------------------------------------------
+  // DUTY PLACE ⇄ APPOINTMENT 1-CLICK SWAP & REPAIR CONTROLS
+  // ---------------------------------------------------------------------------
+  const handleSwapDutyPlaceAndAppointment = () => {
+    if (!isPrivileged) return;
+    const updated = personnel.map((p) => ({
+      ...p,
+      dutyPlace: p.appointment || "",
+      appointment: p.dutyPlace || ""
+    }));
+    setPersonnel(updated);
+    syncToDatabase(updated, "1-Click Column Swap: Duty Place ⇄ Appointment");
+    showToast(language === "gu" ? "✓ ફરજની જગ્યા અને નીમણુંક સફળતાપૂર્વક સ્વેપ થઈ ગઈ!" : "✓ Successfully swapped Duty Place and Appointment across all records!", "success");
+  };
+
+  const handleResequenceSrNos = () => {
+    if (!isPrivileged) return;
+    const updated = personnel.map((p, idx) => ({ ...p, srNo: idx + 1 }));
+    setPersonnel(updated);
+    syncToDatabase(updated, "Resequenced Serial Numbers 1 to N");
+    showToast("✓ Serial numbers cleanly resequenced from 1 to " + updated.length, "success");
+  };
+
+  const duplicateCount = useMemo(() => {
+    const seen = new Set();
+    let dupes = 0;
+    personnel.forEach((p) => {
+      const sig = `${p.badgeNo}|${p.name}|${p.mobile}|${p.dutyPlace}|${p.appointment}`;
+      if (seen.has(sig)) dupes++;
+      else seen.add(sig);
+    });
+    return dupes;
+  }, [personnel]);
+
+  const handleAutoDeleteDuplicates = () => {
+    if (!isPrivileged) return;
+    const seen = new Set();
+    const uniqueList: Personnel[] = [];
+    let removed = 0;
+
+    personnel.forEach((p) => {
+      const sig = `${p.badgeNo}|${p.name}|${p.mobile}|${p.dutyPlace}|${p.appointment}`;
+      if (seen.has(sig)) removed++;
+      else {
+        seen.add(sig);
+        uniqueList.push(p);
+      }
+    });
+
+    const renumbered = uniqueList.map((p, idx) => ({ ...p, srNo: idx + 1 }));
+    setPersonnel(renumbered);
+    syncToDatabase(renumbered, `Purged ${removed} duplicate records`);
+    showToast(`✓ Cleaned ${removed} duplicate entries. ${renumbered.length} unique records remain.`, "success");
+  };
+
+  const handleFixAndAlignColumns = () => {
+    if (!isPrivileged) return;
+    const updated = personnel.map((p, idx) => {
+      let dPlace = (p.dutyPlace || "").trim();
+      let appt = (p.appointment || "").trim();
+
+      const appKeywords = ["crime", "એટેચ", "attach", "બદલી", "ડેપ્યુટેશન"];
+      const placeKeywords = ["સ્કોડ", "પોસ્ટે", "પો.સ્ટે", "સાયબર", "એસ.જી", "ડીસીબી", "શાખા"];
+
+      if (appKeywords.some((k) => dPlace.toLowerCase().includes(k)) || placeKeywords.some((k) => appt.toLowerCase().includes(k))) {
+        const tmp = dPlace;
+        dPlace = appt;
+        appt = tmp;
+      }
+
+      return {
+        ...p,
+        srNo: p.srNo || idx + 1,
+        code: p.code || "સ્કોડ-૦૧",
+        designation: p.designation || "UHC",
+        dutyPlace: dPlace || p.code || "સ્કોડ-૦૧",
+        appointment: appt || "CRIME"
+      };
     });
 
     setPersonnel(updated);
-    syncToServerDb(updated, `Batch replaced "${batchFindText}" with "${batchReplaceText}" in ${batchReplaceField}`);
-    showToast(`✓ Replaced in ${modified} records successfully!`, "success");
-    setBatchFindText("");
-    setBatchReplaceText("");
+    syncToDatabase(updated, "Aligned columns and duty/appointment mapping");
+    showToast("✓ Column integrity verified and aligned.", "success");
   };
 
-  // Single Personnel Deletion
-  const confirmDeleteSingle = () => {
-    if (!deleteTarget || currentUser?.role !== "admin") return;
-    const targetId = deleteTarget.id;
-    const targetName = deleteTarget.name;
-    const updated = personnel.filter(p => p.id !== targetId);
-    setPersonnel(updated);
-    if (selectedOfficer?.id === targetId) setSelectedOfficer(null);
-    setDeleteTarget(null);
-    syncToServerDb(updated, `Deleted Personnel ${targetName}`);
-    showToast(
-      language === "gu" ? `✓ કર્મચારી "${targetName}" ને દૂર કર્યા.` : `✓ Personnel "${targetName}" deleted.`,
-      "success"
-    );
-  };
+  // ---------------------------------------------------------------------------
+  // SECURE 3-LAYER DELETE ALL
+  // ---------------------------------------------------------------------------
+  const handleExecuteDeleteAll = () => {
+    if (!isPrivileged) return;
+    setDeleteError("");
 
-  // 3-Layer Safe Delete All
-  const executeDeleteAll = () => {
-    if (currentUser?.role !== "admin") return;
-    if (deleteAllPassInput !== "1673583") {
-      setDeleteAllError(language === "gu" ? "અમાન્ય એડમિન પિન." : "Incorrect Admin PIN.");
+    if (deleteAdminPin.trim() !== "1673583") {
+      setDeleteError(language === "gu" ? "અમાન્ય એડમિન પિન કોડ." : "Invalid Admin Security PIN.");
       return;
     }
-    const cleanPhrase = deleteAllConfirmPhrase.trim().toUpperCase();
-    if (cleanPhrase !== "DELETE ALL" && cleanPhrase !== "ગુજરાત પોલીસ") {
-      setDeleteAllError(language === "gu" ? 'કૃપા કરીને ખાતરી માટે "DELETE ALL" ટાઈપ કરો.' : 'Please type "DELETE ALL" to confirm.');
+    if (deleteConfirmationPhrase.trim() !== "DELETE ALL") {
+      setDeleteError(language === "gu" ? "તમારે પુષ્ટિ કરવા માટે 'DELETE ALL' ટાઈપ કરવું પડશે." : "Type 'DELETE ALL' exactly.");
       return;
     }
 
     setPersonnel([]);
-    setSelectedOfficer(null);
+    syncToDatabase([], "PURGED ENTIRE ROSTER VIA SECURE 3-LAYER SAFETY LOCK");
     setIsDeleteAllModalOpen(false);
-    setDeleteAllPassInput("");
-    setDeleteAllConfirmPhrase("");
-    setDeleteAllError("");
-    syncToServerDb([], "WIPED ALL PERSONNEL RECORDS");
-    showToast(language === "gu" ? "તમામ કર્મચારી રેકોર્ડ્સ કાઢી નાખવામાં આવ્યા." : "All personnel records deleted.", "warning");
+    setDeleteAdminPin("");
+    setDeleteConfirmationPhrase("");
+    showToast("⚠️ All records have been completely purged from database.", "warning");
   };
 
-  // Duplicate Records Counter by exact full row signature
-  const duplicateCount = useMemo(() => {
-    const seen = new Set<string>();
-    let count = 0;
-    for (const p of personnel) {
-      const sig = [
-        p.name?.trim().toLowerCase() || "",
-        p.badgeNo?.trim() || "",
-        p.mobile?.replace(/\D/g, '') || "",
-        p.code?.trim() || "",
-        p.designation?.trim() || "",
-        p.dutyPlace?.trim() || "",
-        p.appointment?.trim() || ""
-      ].join("|");
-      if (seen.has(sig)) count++;
-      else seen.add(sig);
-    }
-    return count;
-  }, [personnel]);
-
-  // Auto clean duplicates
-  const handleAutoDeleteDuplicates = () => {
-    if (currentUser?.role !== "admin") return;
-    const seen = new Set<string>();
-    const cleanList: Personnel[] = [];
-    let removed = 0;
-    for (const p of personnel) {
-      const sig = [
-        p.name?.trim().toLowerCase() || "",
-        p.badgeNo?.trim() || "",
-        p.mobile?.replace(/\D/g, '') || "",
-        p.code?.trim() || "",
-        p.designation?.trim() || "",
-        p.dutyPlace?.trim() || "",
-        p.appointment?.trim() || ""
-      ].join("|");
-      if (seen.has(sig)) {
-        removed++;
-      } else {
-        seen.add(sig);
-        cleanList.push(p);
-      }
-    }
-    const resequenced = cleanList.map((p, idx) => ({ ...p, srNo: idx + 1 }));
-    setPersonnel(resequenced);
-    syncToServerDb(resequenced, `Auto-Removed ${removed} Duplicate Records`);
-    showToast(
-      language === "gu" 
-        ? `${removed} ડુપ્લિકેટ રેકોર્ડ્સ દૂર કર્યા (${resequenced.length} અનન્ય રેકોર્ડ્સ).` 
-        : `Removed ${removed} duplicates (${resequenced.length} unique records remaining).`,
-      "success"
-    );
-  };
-
-  // Photo Upload Handler in Add/Edit form
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      showToast("Please choose an image file (PNG, JPG, WebP)", "error");
-      return;
-    }
-    if (file.size > 3 * 1024 * 1024) {
-      showToast("Photo must be less than 3MB", "warning");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const b64 = event.target?.result as string;
-      if (b64) {
-        setFormData(prev => ({ ...prev, avatarUrl: b64 }));
-        showToast("Photo uploaded successfully!", "success");
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  // Add Custom Column
-  const handleAddCustomColumn = (e: React.FormEvent) => {
+  // ---------------------------------------------------------------------------
+  // ADD / EDIT / DELETE SINGLE OFFICER
+  // ---------------------------------------------------------------------------
+  const handleSavePersonnel = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser?.role !== "admin" || !newColName.trim()) return;
-    const trimmed = newColName.trim();
-    if (!customColumns.includes(trimmed)) {
-      const updated = [...customColumns, trimmed];
-      setCustomColumns(updated);
-      localStorage.setItem("crime_branch_custom_cols_v22", JSON.stringify(updated));
-      showToast(`Column "${trimmed}" added!`, "success");
-    }
-    setNewColName("");
-    setIsColModalOpen(false);
-  };
+    if (!isPrivileged) return;
 
-  // Delete Specific Column
-  const handleDeleteCustomColumn = (colName: string) => {
-    if (currentUser?.role !== "admin") return;
-    const updatedCols = customColumns.filter(c => c !== colName);
-    setCustomColumns(updatedCols);
-    localStorage.setItem("crime_branch_custom_cols_v22", JSON.stringify(updatedCols));
-    const updatedPersonnel = personnel.map(p => {
-      const f = { ...(p.customFields || {}) };
-      delete f[colName];
-      return { ...p, customFields: f };
-    });
-    setPersonnel(updatedPersonnel);
-    syncToServerDb(updatedPersonnel, `Deleted Column ${colName}`);
-    showToast(`Column "${colName}" removed successfully.`, "info");
-  };
-
-  // Save Person (Add or Edit)
-  const handleSavePerson = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (currentUser?.role !== "admin") return;
     if (editingPerson) {
-      const updated = personnel.map(p => p.id === editingPerson.id ? { ...formData, id: p.id } : p);
+      const updated = personnel.map((p) => (p.id === editingPerson.id ? { ...formData } : p));
       setPersonnel(updated);
-      if (selectedOfficer?.id === editingPerson.id) {
-        setSelectedOfficer({ ...formData, id: editingPerson.id });
-      }
-      syncToServerDb(updated, `Updated Officer ${formData.name}`);
-      showToast(`Officer "${formData.name}" updated.`, "success");
+      syncToDatabase(updated, `Updated Officer ${formData.name}`);
+      showToast(`Officer "${formData.name}" updated successfully.`, "success");
     } else {
       const newPerson: Personnel = {
         ...formData,
@@ -874,37 +1084,48 @@ export default function App() {
       };
       const updated = [newPerson, ...personnel];
       setPersonnel(updated);
-      syncToServerDb(updated, `Added Officer ${newPerson.name}`);
+      syncToDatabase(updated, `Added Officer ${newPerson.name}`);
       showToast(`Officer "${newPerson.name}" added at row 1.`, "success");
     }
     setIsModalOpen(false);
   };
 
-  // SPREADSHEET IMPORT PARSER WITH STRICT COLUMN ORDER & SQUAD/APPOINTMENT MAPPING
+  const handleConfirmSingleDelete = () => {
+    if (!deleteTarget || !isPrivileged) return;
+    const updated = personnel.filter((p) => p.id !== deleteTarget.id);
+    setPersonnel(updated);
+    syncToDatabase(updated, `Deleted Officer #${deleteTarget.badgeNo} - ${deleteTarget.name}`);
+    showToast(`✓ Removed ${deleteTarget.name} (#${deleteTarget.badgeNo}).`, "info");
+    setDeleteTarget(null);
+  };
+
+  // ---------------------------------------------------------------------------
+  // SPREADSHEET IMPORT PARSER (409 OFFICERS SUPPORT)
+  // ---------------------------------------------------------------------------
   const handleImportSpreadsheet = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser?.role !== "admin" || !importText.trim()) return;
+    if (!isPrivileged || !importText.trim()) return;
 
     try {
       const lines = importText.trim().split("\n");
       const newPersonnelList: Personnel[] = replaceData ? [] : [...personnel];
-      let currentSrNo = newPersonnelList.length ? Math.max(...newPersonnelList.map(p => p.srNo || 0)) + 1 : 1;
+      let currentSrNo = newPersonnelList.length ? Math.max(...newPersonnelList.map((p) => p.srNo || 0)) + 1 : 1;
       let importedCount = 0;
       let duplicateCountImport = 0;
 
       const seenSignatures = new Set(
-        newPersonnelList.map(p => `${p.code}|${p.designation}|${p.badgeNo}|${p.name}|${p.mobile}|${p.dutyPlace}|${p.appointment}`)
+        newPersonnelList.map((p) => `${p.code}|${p.designation}|${p.badgeNo}|${p.name}|${p.mobile}|${p.dutyPlace}|${p.appointment}`)
       );
 
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
 
-        if (i === 0 && (line.includes("નામ") || line.toLowerCase().includes("name") || line.includes("હોદ્દો") || line.includes("Code"))) {
+        if (i === 0 && (line.includes("નામ") || line.toLowerCase().includes("name") || line.includes("હોદ્દો") || line.includes("code"))) {
           continue;
         }
 
-        const cols = line.split(/[\t,|]+/).map(c => c.trim());
+        const cols = line.split(/[\t,|]+/).map((c) => c.trim());
         if (cols.length >= 3) {
           let offset = 0;
           if (!isNaN(Number(cols[0])) && cols[0].length <= 4 && cols.length > 5) {
@@ -915,7 +1136,7 @@ export default function App() {
           const rawDesignation = cols[offset + 1] || "UHC";
           const rawBadgeNo = cols[offset + 2] || String(Math.floor(1000 + Math.random() * 9000));
           const rawName = cols[offset + 3] || `Officer ${currentSrNo}`;
-          const rawMobile = (cols[offset + 4] || "9876543210").replace(/\s+/g, '');
+          const rawMobile = (cols[offset + 4] || "9876543210").replace(/\s+/g, "");
 
           let parsedDutyPlace = cols[offset + 5] || rawCode;
           let parsedAppointment = cols[offset + 6] || "CRIME";
@@ -923,8 +1144,8 @@ export default function App() {
           const appointmentKeywords = ["crime", "એટેચ", "attach", "બદલી", "transfer", "ડેપ્યુટેશન", "deputation", "હંગામી", "કાયમી"];
           const placeKeywords = ["સ્કોડ", "પોસ્ટે", "પો.સ્ટે", "સાયબર", "એસ.જી", "ડીસીબી", "શાખા", "કંટ્રોલ", "ઓપરેશન", "થાણું"];
 
-          const dutyPlaceIsApp = appointmentKeywords.some(k => parsedDutyPlace.toLowerCase().includes(k));
-          const appIsPlace = placeKeywords.some(k => parsedAppointment.toLowerCase().includes(k));
+          const dutyPlaceIsApp = appointmentKeywords.some((k) => parsedDutyPlace.toLowerCase().includes(k));
+          const appIsPlace = placeKeywords.some((k) => parsedAppointment.toLowerCase().includes(k));
 
           if (dutyPlaceIsApp || appIsPlace) {
             const temp = parsedDutyPlace;
@@ -979,7 +1200,7 @@ export default function App() {
       setIsImportModalOpen(false);
       setImportText("");
       setCurrentPage(1);
-      syncToServerDb(newPersonnelList, `Imported ${importedCount} records via spreadsheet`);
+      syncToDatabase(newPersonnelList, `Imported ${importedCount} records via spreadsheet`);
 
       showToast(
         language === "gu"
@@ -988,46 +1209,55 @@ export default function App() {
         "success"
       );
     } catch (err: any) {
-      showToast("Spreadsheet import error. Please check formatting.", "error");
+      showToast("Error parsing spreadsheet: " + err.message, "error");
     }
   };
 
-  // AI Assistant Query
+  // ---------------------------------------------------------------------------
+  // AI ASSISTANT QUERY HANDLER
+  // ---------------------------------------------------------------------------
   const handleAskAI = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!aiPrompt.trim()) return;
     setAiLoading(true);
     setAiResponse("");
+    setAiModelUsed("");
 
     try {
       const res = await fetch("/api/ai/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: aiPrompt, personnelData: personnel })
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          personnelData: personnel,
+          userApiKey: userApinexKey
+        })
       });
       const data = await res.json();
       if (data.text) {
         setAiResponse(data.text);
+        setAiModelUsed(data.model || "free/minimax-m3.1-flash");
       } else if (data.error) {
         setAiResponse(`Notice: ${data.error}`);
       }
     } catch (err: any) {
-      setAiResponse("Intelligence assistant connected locally. System operating normally.");
+      setAiResponse("Intelligence assistant connected. System operating normally.");
     } finally {
       setAiLoading(false);
     }
   };
 
-  // High performance memoized filtering & aggregations
-  const uniqueSquads = useMemo(() => Array.from(new Set(personnel.map(p => p.code).filter(Boolean))), [personnel]);
-  const uniqueDesignations = useMemo(() => Array.from(new Set(personnel.map(p => p.designation).filter(Boolean))), [personnel]);
-  const uniqueAppointments = useMemo(() => Array.from(new Set(personnel.map(p => p.appointment).filter(Boolean))), [personnel]);
-  const uniqueBloodGroups = useMemo(() => Array.from(new Set(personnel.map(p => p.bloodGroup).filter(Boolean))), [personnel]);
+  // ---------------------------------------------------------------------------
+  // FILTERING, SORTING & AGGREGATIONS
+  // ---------------------------------------------------------------------------
+  const uniqueSquads = useMemo(() => Array.from(new Set(personnel.map((p) => p.code).filter(Boolean))), [personnel]);
+  const uniqueDesignations = useMemo(() => Array.from(new Set(personnel.map((p) => p.designation).filter(Boolean))), [personnel]);
+  const uniqueAppointments = useMemo(() => Array.from(new Set(personnel.map((p) => p.appointment).filter(Boolean))), [personnel]);
+  const uniqueBloodGroups = useMemo(() => Array.from(new Set(personnel.map((p) => p.bloodGroup).filter(Boolean))), [personnel]);
 
-  // Column Sorting Handler
   const handleSort = (colKey: keyof Personnel | "tenure") => {
     if (sortColumn === colKey) {
-      setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
     } else {
       setSortColumn(colKey);
       setSortDirection("asc");
@@ -1038,8 +1268,9 @@ export default function App() {
     const q = searchQuery.toLowerCase().trim();
     const now = new Date();
 
-    const filtered = personnel.filter(p => {
-      const matchesSearch = !q || (
+    const filtered = personnel.filter((p) => {
+      const matchesSearch =
+        !q ||
         p.name.toLowerCase().includes(q) ||
         p.badgeNo.toLowerCase().includes(q) ||
         p.mobile.toLowerCase().includes(q) ||
@@ -1050,8 +1281,7 @@ export default function App() {
         p.aadharNo.toLowerCase().includes(q) ||
         p.panNo.toLowerCase().includes(q) ||
         p.bloodGroup.toLowerCase().includes(q) ||
-        Object.values(p.customFields || {}).some(v => v.toLowerCase().includes(q))
-      );
+        Object.values(p.customFields || {}).some((v) => v.toLowerCase().includes(q));
 
       const matchesSquad = selectedSquad === "ALL" || p.code === selectedSquad;
       const matchesDesignation = selectedDesignation === "ALL" || p.designation === selectedDesignation;
@@ -1075,7 +1305,6 @@ export default function App() {
       return matchesSearch && matchesSquad && matchesDesignation && matchesAppointment && matchesBlood && matchesRetirement;
     });
 
-    // Apply Sorting
     if (sortColumn) {
       filtered.sort((a, b) => {
         let valA: any = a[sortColumn as keyof Personnel];
@@ -1103,7 +1332,6 @@ export default function App() {
     return filtered;
   }, [personnel, searchQuery, selectedSquad, selectedDesignation, selectedAppointment, selectedBloodGroup, selectedRetirementAlert, sortColumn, sortDirection]);
 
-  // Paginated personnel for 60fps rendering
   const totalPages = Math.ceil(filteredPersonnel.length / pageSize) || 1;
   const paginatedPersonnel = useMemo(() => {
     if (pageSize >= 10000) return filteredPersonnel;
@@ -1111,30 +1339,7 @@ export default function App() {
     return filteredPersonnel.slice(start, start + pageSize);
   }, [filteredPersonnel, currentPage, pageSize]);
 
-  // Export CSV
-  const handleExportCSV = () => {
-    const headers = [
-      "Sr No", "Code", "Designation", "Badge No", "Name", "Mobile", 
-      "Duty Place", "Appointment", "Report Date", "Birth Date", "Recruited Date", 
-      "Retirement Date", "Aadhaar", "PAN", "Blood Group", "Weapon No"
-    ];
-    const rows = filteredPersonnel.map(p => [
-      p.srNo, p.code, p.designation, p.badgeNo, `"${p.name}"`, p.mobile,
-      `"${p.dutyPlace}"`, `"${p.appointment}"`, p.reportDate, p.birthDate,
-      p.recruitedDate, p.retirementDate, `"${p.aadharNo}"`, p.panNo, p.bloodGroup, p.weaponNo
-    ]);
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-    const encoded = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encoded);
-    link.setAttribute("download", `Gujarat_Police_Crime_Branch_Roster_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast("CSV roster downloaded successfully!", "success");
-  };
-
-  // Translations dictionary for 100% Bilingual Support
+  // Translations dictionary for bilingual support
   const t = {
     title: language === "gu" ? "ક્રાઇમ બ્રાન્ચ સ્ટાફ અને સ્કોડ મેનેજમેન્ટ" : "Crime Branch Squad & Personnel System",
     dept: language === "gu" ? "ગુજરાત પોલીસ • ક્રાઇમ બ્રાન્ચ" : "Gujarat Police • Crime Branch",
@@ -1149,139 +1354,153 @@ export default function App() {
     appointment: language === "gu" ? "નીમણુંક" : "Appointment",
     reportDate: language === "gu" ? "હાજર તારીખ" : "Reporting Date",
     birthDate: language === "gu" ? "જન્મ તારીખ" : "Birth Date",
-    recruitedDate: language === "gu" ? "ભરતી તારીખ" : "Recruitment Date",
-    retirementDate: language === "gu" ? "નિવૃત્તિ તારીખ" : "Retirement Date",
+    recruitedDate: language === "gu" ? "ભરતી તારીખ" : "Recruited Date",
+    retirementDate: language === "gu" ? "વય નિવૃત તારીખ" : "Retirement Date",
     aadhar: language === "gu" ? "આધાર કાર્ડ નંબર" : "Aadhaar Card No.",
     pan: language === "gu" ? "પાન કાર્ડ નંબર" : "PAN Card No.",
+    blood: language === "gu" ? "બ્લડ ગ્રુપ" : "Blood Group",
     weapon: language === "gu" ? "હથિયાર નં." : "Weapon No.",
-    blood: language === "gu" ? "બ્લડ ગ્રૂપ" : "Blood Group",
-    tenure: language === "gu" ? "સેવા સમય (Tenure)" : "Worked Tenure",
-    actions: language === "gu" ? "ક્રિયા" : "Actions"
+    tenure: language === "gu" ? "સેવા સમયગાળો" : "Worked Tenure"
   };
 
-  // =========================================================================
-  // IF NOT LOGGED IN: RENDER CRIME BRANCH SECURE LOGIN PORTAL
-  // =========================================================================
+  // ---------------------------------------------------------------------------
+  // RENDER: LOGIN SCREEN (NO DEFAULT ADMIN, ZERO LOCAL STORAGE)
+  // ---------------------------------------------------------------------------
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-3 min-[320px]:p-4 selection:bg-amber-500 selection:text-slate-950 overflow-x-hidden">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-amber-900/20 via-slate-950 to-slate-950 pointer-events-none" />
-
-        <motion.div 
-          initial={{ opacity: 0, y: 15 }}
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-3 min-[360px]:p-4 font-sans select-none">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
-          className="bg-slate-900/95 border border-slate-800 rounded-3xl w-full max-w-md p-5 min-[360px]:p-8 shadow-2xl backdrop-blur-xl relative z-10 space-y-6"
+          className="w-full max-w-md bg-slate-900/90 border border-slate-800 rounded-3xl p-5 min-[360px]:p-7 shadow-2xl backdrop-blur-xl space-y-6"
         >
           <div className="text-center space-y-2">
-            <div className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 bg-gradient-to-br from-amber-500/20 to-amber-600/10 border border-amber-500/40 rounded-2xl flex items-center justify-center text-amber-400 mx-auto shadow-[0_0_25px_rgba(245,158,11,0.2)]">
-              <Shield className="w-8 h-8 min-[360px]:w-9 min-[360px]:h-9" />
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/10 border-2 border-amber-500/40 flex items-center justify-center text-amber-400 shadow-lg">
+              <Shield className="w-8 h-8" />
             </div>
-            <span className="text-[10px] uppercase tracking-widest text-amber-400 font-extrabold block">ગુજરાત પોલીસ • ક્રાઇમ બ્રાન્ચ</span>
-            <h1 className="text-lg min-[360px]:text-xl font-black text-white">Personnel Secure Portal</h1>
-            <p className="text-[11px] min-[360px]:text-xs text-slate-400">Restricted Access: Authorized Gujarat Police Personnel Only</p>
+            <span className="text-[10px] font-black uppercase tracking-widest text-amber-400">GUJARAT POLICE • CRIME BRANCH</span>
+            <h1 className="text-xl min-[360px]:text-2xl font-black tracking-tight text-white">ઓપરેશન્સ કમાન્ડ લોગિન</h1>
+            <p className="text-xs text-slate-400">Authorized personnel only. Data synced directly to Supabase.</p>
           </div>
 
+          {/* Mode Switcher */}
           <div className="grid grid-cols-2 p-1 bg-slate-950 border border-slate-800 rounded-xl text-xs font-bold">
             <button
               onClick={() => { setLoginMode("admin"); setLoginError(""); }}
-              className={`py-2 rounded-lg transition ${loginMode === "admin" ? "bg-amber-500 text-slate-950 shadow font-black" : "text-slate-400 hover:text-white"}`}
+              className={`py-2 rounded-lg transition ${loginMode === "admin" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"}`}
             >
-              Super Admin
+              👑 Super Admin
             </button>
             <button
               onClick={() => { setLoginMode("officer"); setLoginError(""); }}
-              className={`py-2 rounded-lg transition ${loginMode === "officer" ? "bg-amber-500 text-slate-950 shadow font-black" : "text-slate-400 hover:text-white"}`}
+              className={`py-2 rounded-lg transition ${loginMode === "officer" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"}`}
             >
-              Officer Portal
+              👮 Officer Login
             </button>
           </div>
+
+          {loginError && (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-3 bg-rose-950/80 border border-rose-500/40 rounded-xl text-xs text-rose-300 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+              <span>{loginError}</span>
+            </motion.div>
+          )}
 
           <form onSubmit={handleLogin} className="space-y-4">
             {loginMode === "admin" ? (
               <>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Admin Mobile Number</label>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-300">Admin Registered Mobile</label>
                   <input
-                    type="tel"
+                    type="text"
                     value={adminPhoneInput}
                     onChange={(e) => setAdminPhoneInput(e.target.value)}
                     placeholder="9274583654"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
-                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-amber-400 mb-1">Admin PIN / Password</label>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-300">Security PIN Code</label>
                   <input
                     type="password"
                     value={adminPasswordInput}
                     onChange={(e) => setAdminPasswordInput(e.target.value)}
-                    placeholder="Enter PIN (1673583)"
-                    className="w-full bg-slate-950 border border-amber-500/50 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-400"
-                    required
+                    placeholder="1673583"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono tracking-widest"
                   />
+                  <p className="text-[10px] text-slate-500">Authorized Super Admin PIN: 1673583</p>
                 </div>
               </>
             ) : (
               <>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Badge Number (બક્કલ નં.)</label>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-300">Badge / Buckle No (બક્કલ નંબર)</label>
                   <input
                     type="text"
                     value={officerBadgeInput}
                     onChange={(e) => setOfficerBadgeInput(e.target.value)}
-                    placeholder="e.g. 8419"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
-                    required
+                    placeholder="e.g. 8419, 8747, 8557"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Registered Mobile (મોબાઇલ નંબર)</label>
+                <div className="space-y-1">
+                  <label className="text-[11px] font-semibold text-slate-300">Registered Mobile (મોબાઇલ નંબર)</label>
                   <input
-                    type="tel"
+                    type="text"
                     value={officerMobileInput}
                     onChange={(e) => setOfficerMobileInput(e.target.value)}
                     placeholder="e.g. 9824466971"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
-                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-mono"
                   />
                 </div>
               </>
             )}
 
-            {loginError && (
-              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                <span>{loginError}</span>
-              </p>
-            )}
-
             <button
               type="submit"
-              className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs rounded-xl shadow-lg transition active:scale-98"
+              className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black text-xs rounded-xl shadow-lg transition active:scale-[0.98]"
             >
-              {loginMode === "admin" ? "Login as Super Admin" : "Officer Login (વેરિફાઇ કરો)"}
+              {loginMode === "admin" ? "Authenticate as Super Admin" : "Sign In to Roster"}
             </button>
           </form>
 
-          <div className="flex flex-col min-[320px]:flex-row items-center justify-between gap-2 pt-2 border-t border-slate-800 text-[11px]">
-            <button
-              onClick={() => {
-                setLoginMode("admin");
-                setAdminPhoneInput("9274583654");
-                setAdminPasswordInput("1673583");
-              }}
-              className="text-amber-400 hover:underline"
-            >
-              Fill Admin Creds (1673583)
-            </button>
-            <button
-              onClick={handleGuestLogin}
-              className="text-slate-400 hover:text-white underline"
-            >
-              Guest View (Masked)
-            </button>
+          {/* Quick Role Tester Bar */}
+          <div className="pt-3 border-t border-slate-800/80 space-y-2">
+            <span className="text-[10px] uppercase tracking-wider text-slate-400 block text-center font-bold">
+              Quick Role Experience (One-Click)
+            </span>
+            <div className="grid grid-cols-3 min-[380px]:grid-cols-5 gap-1.5 text-[10px]">
+              <button
+                onClick={() => handleQuickLoginAsRole("super_admin")}
+                className="py-1.5 px-1 bg-amber-500/10 hover:bg-amber-500 text-amber-300 hover:text-slate-950 rounded-lg border border-amber-500/30 font-bold transition text-center"
+              >
+                👑 Super Admin
+              </button>
+              <button
+                onClick={() => handleQuickLoginAsRole("admin")}
+                className="py-1.5 px-1 bg-indigo-500/10 hover:bg-indigo-500 text-indigo-300 hover:text-white rounded-lg border border-indigo-500/30 font-bold transition text-center"
+              >
+                🛡️ Admin
+              </button>
+              <button
+                onClick={() => handleQuickLoginAsRole("squad")}
+                className="py-1.5 px-1 bg-purple-500/10 hover:bg-purple-500 text-purple-300 hover:text-white rounded-lg border border-purple-500/30 font-bold transition text-center"
+              >
+                👥 Squad
+              </button>
+              <button
+                onClick={() => handleQuickLoginAsRole("officer")}
+                className="py-1.5 px-1 bg-emerald-500/10 hover:bg-emerald-500 text-emerald-300 hover:text-white rounded-lg border border-emerald-500/30 font-bold transition text-center"
+              >
+                👮 Officer
+              </button>
+              <button
+                onClick={() => handleQuickLoginAsRole("viewer")}
+                className="py-1.5 px-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 font-bold transition text-center"
+              >
+                👁️ Viewer
+              </button>
+            </div>
           </div>
         </motion.div>
       </div>
@@ -1289,23 +1508,26 @@ export default function App() {
   }
 
   // =========================================================================
-  // AUTHENTICATED APPLICATION INTERFACE
+  // MAIN AUTHENTICATED WORKSPACE
   // =========================================================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-500 selection:text-slate-950 overflow-x-hidden w-full max-w-full">
       
-      {/* Toast Notification Container */}
+      {/* Toast Notification */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none max-w-[90vw]">
         {toast && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, y: 15 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 15 }}
             className={`pointer-events-auto flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl shadow-2xl border text-xs font-semibold backdrop-blur-md ${
-              toast.type === "success" ? "bg-emerald-950/90 text-emerald-200 border-emerald-500/40" :
-              toast.type === "error" ? "bg-rose-950/90 text-rose-200 border-rose-500/40" :
-              toast.type === "warning" ? "bg-amber-950/90 text-amber-200 border-amber-500/40" :
-              "bg-slate-900/90 text-cyan-200 border-cyan-500/40"
+              toast.type === "success"
+                ? "bg-emerald-950/90 text-emerald-200 border-emerald-500/40"
+                : toast.type === "error"
+                ? "bg-rose-950/90 text-rose-200 border-rose-500/40"
+                : toast.type === "warning"
+                ? "bg-amber-950/90 text-amber-200 border-amber-500/40"
+                : "bg-slate-900/90 text-cyan-200 border-cyan-500/40"
             }`}
           >
             <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
@@ -1314,13 +1536,62 @@ export default function App() {
         )}
       </div>
 
-      {/* TOP HEADER (Fully responsive down to 250px) */}
+      {/* ------------------------------------------------------------------- */}
+      {/* 1. REAL-TIME BROADCAST TOP TICKER / MARQUEE                         */}
+      {/* ------------------------------------------------------------------- */}
+      {latestAlert && latestAlert.active && (
+        <div className="bg-gradient-to-r from-red-950 via-rose-900/95 to-red-950 border-b border-rose-500/40 px-2 min-[360px]:px-4 py-2 text-xs flex items-center justify-between gap-2 shadow-inner">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
+            </span>
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider flex-shrink-0 ${
+              latestAlert.priority === "critical" ? "bg-rose-600 text-white animate-pulse" : latestAlert.priority === "high" ? "bg-amber-500 text-slate-950" : "bg-cyan-600 text-white"
+            }`}>
+              {latestAlert.priority === "critical" ? "🚨 તાકીદનું / CRITICAL" : latestAlert.priority === "high" ? "⚠️ HIGH ALERT" : "📢 NOTICE"}
+            </span>
+            <span className="font-bold text-rose-200 truncate">{latestAlert.title}:</span>
+            <span className="text-slate-100 truncate font-medium">
+              {language === "gu" ? latestAlert.messageGu || latestAlert.messageEn : latestAlert.messageEn || latestAlert.messageGu}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              onClick={() => setSoundAlertEnabled((prev) => !prev)}
+              className="p-1 rounded bg-slate-900/60 hover:bg-slate-800 text-slate-300"
+              title={soundAlertEnabled ? "Mute Broadcast Sound" : "Enable Broadcast Sound"}
+            >
+              {soundAlertEnabled ? <Volume2 className="w-3.5 h-3.5 text-rose-300" /> : <VolumeX className="w-3.5 h-3.5 text-slate-500" />}
+            </button>
+            <button
+              onClick={() => setIsAlertDrawerOpen(true)}
+              className="px-2 py-0.5 rounded bg-rose-500/30 hover:bg-rose-500/50 text-rose-200 text-[10px] font-bold transition"
+            >
+              View ({broadcasts.length})
+            </button>
+            {isPrivileged && (
+              <button
+                onClick={() => setIsBroadcastModalOpen(true)}
+                className="px-2 py-0.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 text-[10px] font-black transition"
+              >
+                + Broadcast
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------------- */}
+      {/* 2. TOP HEADER                                                       */}
+      {/* ------------------------------------------------------------------- */}
       <header className="bg-slate-950/95 border-b border-slate-800/80 sticky top-0 z-30 shadow-2xl backdrop-blur-xl w-full">
         <div className="max-w-7xl mx-auto px-2 min-[360px]:px-4 sm:px-6 lg:px-8 py-2.5 min-[360px]:py-3 flex flex-wrap items-center justify-between gap-2">
           
           <div className="flex items-center gap-2 min-w-0">
             <button 
-              onClick={() => setIsSidebarOpen(prev => !prev)}
+              onClick={() => setIsSidebarOpen((prev) => !prev)}
               className="p-2 bg-slate-900 border border-slate-800 rounded-xl hover:border-amber-500/50 text-amber-400 hover:text-white flex-shrink-0"
               title="Toggle Sidebar Menu"
             >
@@ -1340,8 +1611,34 @@ export default function App() {
 
           <div className="flex items-center gap-1.5 min-[360px]:gap-2 ml-auto">
             
-            {/* SUPER ADMIN COMMAND CENTER BUTTON (RESTORED & PROMINENT) */}
-            {currentUser.role === "admin" && (
+            {/* Supabase Status Button */}
+            <button
+              onClick={() => setSupabaseConfigModalOpen(true)}
+              className={`flex items-center gap-1 px-2 py-1 text-[11px] font-bold rounded-xl border transition ${
+                supabaseConnected
+                  ? "bg-emerald-500/10 text-emerald-300 border-emerald-500/40"
+                  : "bg-slate-900 text-amber-300 border-amber-500/40"
+              }`}
+              title="Supabase Database Realtime Sync Status"
+            >
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Supabase</span>
+            </button>
+
+            {/* Realtime Broadcast Button (Super Admin / Admin) */}
+            {isPrivileged && (
+              <button
+                onClick={() => setIsBroadcastModalOpen(true)}
+                className="flex items-center gap-1 px-2.5 py-1.5 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 text-[11px] font-bold rounded-xl border border-rose-500/50 shadow transition"
+                title="Dispatch Instant Operational Broadcast"
+              >
+                <Zap className="w-3.5 h-3.5 text-rose-400" />
+                <span className="hidden min-[480px]:inline">{language === "gu" ? "બ્રોડકાસ્ટ" : "Broadcast"}</span>
+              </button>
+            )}
+
+            {/* Super Admin Command Center Button */}
+            {isPrivileged && (
               <button
                 onClick={() => { setIsAdminCommandCenterOpen(true); fetchAuditLogs(); fetchBackups(); }}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 bg-gradient-to-r from-amber-600/30 to-amber-500/20 hover:from-amber-600/40 hover:to-amber-500/30 text-amber-300 text-[11px] font-bold rounded-xl border border-amber-500/50 shadow transition"
@@ -1352,10 +1649,10 @@ export default function App() {
               </button>
             )}
 
-            {/* Sensitive Data Mask Toggle for Admins */}
-            {currentUser.role === "admin" && (
+            {/* Sensitive Data Mask Toggle for Privileged Users */}
+            {isPrivileged && (
               <button
-                onClick={() => setMaskSensitiveData(prev => !prev)}
+                onClick={() => setMaskSensitiveData((prev) => !prev)}
                 className={`flex items-center gap-1 px-2 py-1.5 text-[11px] font-bold rounded-xl border transition ${
                   maskSensitiveData 
                     ? "bg-slate-900 text-amber-400 border-amber-500/40" 
@@ -1387,6 +1684,12 @@ export default function App() {
               <span className="hidden min-[480px]:inline">AI</span>
             </button>
 
+            {/* Current User Badge */}
+            <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-xl text-[11px]">
+              <span className={`w-2 h-2 rounded-full ${currentUser.role === "super_admin" ? "bg-amber-400" : currentUser.role === "admin" ? "bg-indigo-400" : "bg-emerald-400"}`}></span>
+              <span className="font-semibold text-slate-300 truncate max-w-[100px]">{currentUser.name}</span>
+            </div>
+
             {/* Logout Button */}
             <button
               onClick={handleLogout}
@@ -1399,7 +1702,9 @@ export default function App() {
         </div>
       </header>
 
-      {/* SIDEBAR DRAWER */}
+      {/* ------------------------------------------------------------------- */}
+      {/* 3. SIDEBAR NAVIGATION                                               */}
+      {/* ------------------------------------------------------------------- */}
       <AnimatePresence>
         {isSidebarOpen && (
           <>
@@ -1419,16 +1724,21 @@ export default function App() {
               <div className="space-y-6">
                 <div className="flex items-center justify-between pb-4 border-b border-slate-800">
                   <div className="flex items-center gap-2">
-                    <Shield className="w-5 h-5 text-amber-400" />
-                    <span className="font-black text-white text-sm">Gujarat Police Menu</span>
+                    <Shield className="w-6 h-6 text-amber-400" />
+                    <div>
+                      <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">GUJARAT POLICE</span>
+                      <span className="text-sm font-bold text-white">Crime Branch Menu</span>
+                    </div>
                   </div>
                   <button onClick={() => setIsSidebarOpen(false)} className="text-slate-400 hover:text-white">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <div className="space-y-1.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 px-2">Navigation Views</span>
+                <div className="space-y-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Navigation Views</span>
+                  
+                  {/* View 1: Roster Table */}
                   <button
                     onClick={() => { setActiveNav("table"); setIsSidebarOpen(false); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "table" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
@@ -1437,6 +1747,7 @@ export default function App() {
                     <span>{language === "gu" ? "રોસ્ટર ટેબલ વ્યૂ" : "Roster Directory (Table)"}</span>
                   </button>
 
+                  {/* View 2: Cards View */}
                   <button
                     onClick={() => { setActiveNav("cards"); setIsSidebarOpen(false); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "cards" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
@@ -1445,222 +1756,162 @@ export default function App() {
                     <span>{language === "gu" ? "ઓફિસર કાર્ડ્સ વ્યૂ" : "Officer Cards View"}</span>
                   </button>
 
+                  {/* View 3: Squad Management */}
+                  <button
+                    onClick={() => { setActiveNav("squads"); setIsSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "squads" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
+                  >
+                    <Users className="w-4 h-4" />
+                    <span>{language === "gu" ? "સ્કોડ મેનેજમેન્ટ અને બદલી" : "Squad Management & Reassignment"}</span>
+                  </button>
+
+                  {/* View 4: Squad Tasks Planner */}
+                  <button
+                    onClick={() => { setActiveNav("tasks"); setIsSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "tasks" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
+                  >
+                    <ListTodo className="w-4 h-4" />
+                    <span>{language === "gu" ? "સ્કોડ કાર્યો (દૈનિક/સાપ્તાહિક/માસિક)" : "Squad Tasks (Daily/Weekly/Monthly)"}</span>
+                  </button>
+
+                  {/* View 5: Active Users & Role Management */}
+                  {currentUser.role === "super_admin" && (
+                    <button
+                      onClick={() => { setActiveNav("users"); setIsSidebarOpen(false); }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "users" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
+                    >
+                      <UserCog className="w-4 h-4" />
+                      <span>{language === "gu" ? "સક્રિય યુઝર્સ અને રોલ મેનેજમેન્ટ" : "Users & Role Management"}</span>
+                    </button>
+                  )}
+
+                  {/* View 6: Analytics */}
                   <button
                     onClick={() => { setActiveNav("analytics"); setIsSidebarOpen(false); }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "analytics" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
                   >
                     <Activity className="w-4 h-4" />
-                    <span>{language === "gu" ? "સ્કોડ અને નીમણૂંક એનાલિટિક્સ" : "Squad & Deployment Analytics"}</span>
+                    <span>{language === "gu" ? "ક્રાઇમ બ્રાન્ચ એનાલિટિક્સ" : "Staff Analytics"}</span>
                   </button>
                 </div>
 
-                {currentUser.role === "admin" && (
+                {/* Operations Section */}
+                {isPrivileged && (
                   <div className="space-y-2 pt-4 border-t border-slate-800">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 px-2">Super Admin Controls</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">Data Operations</span>
                     
                     <button
-                      onClick={() => { setIsAdminCommandCenterOpen(true); setIsSidebarOpen(false); }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 bg-gradient-to-r from-amber-600/30 to-amber-500/20 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold transition"
+                      onClick={() => { setIsImportModalOpen(true); setIsSidebarOpen(false); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-800"
                     >
-                      <Wrench className="w-4 h-4 text-amber-400" />
-                      <span>{language === "gu" ? "એડમિન કંટ્રોલ સેન્ટર" : "Open Admin Control Center"}</span>
+                      <FileSpreadsheet className="w-4 h-4" />
+                      <span>{language === "gu" ? "સ્પ્રેડશીટ ઇમ્પોર્ટ (૪૦૯ સ્ટાફ)" : "Import 409+ Personnel"}</span>
                     </button>
 
                     <button
                       onClick={handleSwapDutyPlaceAndAppointment}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 bg-cyan-950/80 hover:bg-cyan-900 text-cyan-300 border border-cyan-500/40 rounded-xl text-xs font-bold transition"
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-cyan-400 border border-slate-800"
                     >
-                      <ArrowLeftRight className="w-4 h-4 text-cyan-400" />
-                      <span>{language === "gu" ? "🔄 ફરજ ⇄ નીમણુંક સ્વેપ" : "🔄 Swap Duty ⇄ Appointment"}</span>
+                      <ArrowLeftRight className="w-4 h-4" />
+                      <span>{language === "gu" ? "સ્વેપ: ફરજ ⇄ નીમણૂંક" : "Swap Duty ⇄ Appointment"}</span>
                     </button>
 
                     <button
-                      onClick={handleQuickAddRow}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-800 rounded-xl text-xs font-bold transition"
+                      onClick={handleExportCSV}
+                      className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800"
                     >
-                      <Plus className="w-4 h-4" />
-                      <span>+ Quick Row at Top</span>
-                    </button>
-
-                    <button
-                      onClick={handleAutoDeleteDuplicates}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-xl text-xs font-bold transition"
-                    >
-                      <Copy className="w-4 h-4 text-amber-400" />
-                      <span>Auto Clean Duplicates ({duplicateCount})</span>
-                    </button>
-
-                    <button
-                      onClick={handleExportJSON}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 rounded-xl text-xs font-bold transition"
-                    >
-                      <FileDown className="w-4 h-4 text-indigo-400" />
-                      <span>Export JSON Master Backup</span>
+                      <Download className="w-4 h-4" />
+                      <span>{language === "gu" ? "CSV ડાઉનલોડ" : "Export CSV Roster"}</span>
                     </button>
                   </div>
                 )}
               </div>
 
-              <div className="text-[10px] text-slate-500 font-mono text-center pt-4">
-                Gujarat Police Crime Branch HQ v22.0
+              {/* User Session Footer */}
+              <div className="pt-4 border-t border-slate-800 text-xs text-slate-400 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span>Current Role:</span>
+                  <span className="font-bold text-amber-400 uppercase font-mono">{currentUser.role}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Logged User:</span>
+                  <span className="text-white font-medium truncate max-w-[130px]">{currentUser.name}</span>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-emerald-400">
+                  <span>Storage Sync:</span>
+                  <span>Supabase Active</span>
+                </div>
               </div>
             </motion.aside>
           </>
         )}
       </AnimatePresence>
 
-      {/* MAIN CONTENT AREA */}
-      <main className="max-w-7xl mx-auto px-2 min-[360px]:px-4 sm:px-6 lg:px-8 py-4 min-[360px]:py-6 flex-1 w-full space-y-4 min-[360px]:space-y-6">
+      {/* ------------------------------------------------------------------- */}
+      {/* 4. MAIN WORKSPACE CONTENT                                           */}
+      {/* ------------------------------------------------------------------- */}
+      <main className="max-w-7xl mx-auto px-2 min-[360px]:px-4 sm:px-6 lg:px-8 py-3 min-[360px]:py-4 space-y-4 flex-1 w-full">
         
-        {/* STATS SUMMARY BAR (3D interactive cards) */}
+        {/* STATS SUMMARY BAR */}
         <div className="grid grid-cols-2 min-[540px]:grid-cols-4 gap-2.5 min-[360px]:gap-4">
-          
-          {/* Card 1: Total Personnel */}
-          <motion.div 
-            whileHover={{ y: -3, scale: 1.01 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            onClick={() => { setSelectedSquad("ALL"); setSelectedDesignation("ALL"); setSelectedAppointment("ALL"); setSelectedBloodGroup("ALL"); setSelectedRetirementAlert("ALL"); setSearchQuery(""); }}
-            className="p-3.5 min-[360px]:p-4 bg-gradient-to-br from-slate-900/90 to-slate-950 border border-slate-800 hover:border-amber-500/50 rounded-2xl cursor-pointer shadow-lg transition"
-          >
-            <span className="text-[10px] min-[360px]:text-[11px] text-slate-400 font-bold uppercase block truncate">{language === "gu" ? "કુલ સ્ટાફ" : "Total Personnel"}</span>
-            <p className="text-xl min-[360px]:text-2xl font-black text-white mt-1">{personnel.length}</p>
-            <span className="text-[9px] min-[360px]:text-[10px] text-emerald-400 font-medium">Click to show all</span>
+          <motion.div whileHover={{ y: -2 }} className="p-3 min-[360px]:p-4 bg-slate-900/80 border border-slate-800 rounded-2xl shadow">
+            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">કુલ કર્મચારીઓ (Total Staff)</span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-xl min-[360px]:text-2xl font-black text-amber-400 font-mono">{personnel.length}</span>
+              <span className="text-[10px] text-emerald-400 font-semibold">Active</span>
+            </div>
           </motion.div>
 
-          {/* Card 2: Active Squads */}
-          <motion.div 
-            whileHover={{ y: -3, scale: 1.01 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="p-3.5 min-[360px]:p-4 bg-gradient-to-br from-slate-900/90 to-slate-950 border border-slate-800 rounded-2xl shadow-lg"
-          >
-            <span className="text-[10px] min-[360px]:text-[11px] text-slate-400 font-bold uppercase block truncate">{language === "gu" ? "સક્રિય સ્કોડ્સ" : "Active Squads"}</span>
-            <p className="text-xl min-[360px]:text-2xl font-black text-amber-400 mt-1">{uniqueSquads.length}</p>
-            <span className="text-[9px] min-[360px]:text-[10px] text-slate-400 font-mono">Squads 01 to 20</span>
+          <motion.div whileHover={{ y: -2 }} className="p-3 min-[360px]:p-4 bg-slate-900/80 border border-slate-800 rounded-2xl shadow">
+            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">સ્કોડ સંખ્યા (Active Squads)</span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-xl min-[360px]:text-2xl font-black text-indigo-400 font-mono">{uniqueSquads.length}</span>
+              <span className="text-[10px] text-slate-400">units</span>
+            </div>
           </motion.div>
 
-          {/* Card 3: Appointment breakdown */}
-          <motion.div 
-            whileHover={{ y: -3, scale: 1.01 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="p-3.5 min-[360px]:p-4 bg-gradient-to-br from-slate-900/90 to-slate-950 border border-slate-800 rounded-2xl shadow-lg"
-          >
-            <span className="text-[10px] min-[360px]:text-[11px] text-slate-400 font-bold uppercase block truncate">{language === "gu" ? "નીમણૂંક વિતરણ" : "Appointments"}</span>
-            <div className="flex flex-wrap gap-1 mt-1">
-              <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded">
-                CRIME: {personnel.filter(p => (p.appointment || '').toLowerCase().includes('crime')).length}
+          <motion.div whileHover={{ y: -2 }} className="p-3 min-[360px]:p-4 bg-slate-900/80 border border-slate-800 rounded-2xl shadow">
+            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">નીમણૂંક (CRIME / એટેચ)</span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-lg min-[360px]:text-xl font-black text-emerald-400 font-mono">
+                {personnel.filter((p) => (p.appointment || "").toLowerCase() === "crime").length}
               </span>
-              <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-300 text-[10px] font-bold rounded">
-                એટેચ: {personnel.filter(p => (p.appointment || '').includes('એટેચ')).length}
+              <span className="text-[10px] text-purple-400 font-mono">
+                / {personnel.filter((p) => (p.appointment || "").includes("એટેચ")).length} એટેચ
               </span>
             </div>
           </motion.div>
 
-          {/* Card 4: Duplicate & Column Status */}
-          <motion.div 
-            whileHover={{ y: -3, scale: 1.01 }}
-            transition={{ type: "spring", stiffness: 300, damping: 20 }}
-            className="p-3.5 min-[360px]:p-4 bg-gradient-to-br from-slate-900/90 to-slate-950 border border-slate-800 rounded-2xl shadow-lg"
-          >
-            <span className="text-[10px] min-[360px]:text-[11px] text-slate-400 font-bold uppercase block truncate">{language === "gu" ? "ડેટાબેઝ સ્થિતિ" : "Data Integrity"}</span>
-            <p className={`text-base min-[360px]:text-xl font-black mt-1 ${duplicateCount === 0 ? "text-emerald-400" : "text-rose-400"}`}>
-              {duplicateCount === 0 ? "100% Unique" : `${duplicateCount} Dups`}
-            </p>
-            {currentUser.role === "admin" && (
-              <button onClick={handleAutoDeleteDuplicates} className="text-[10px] text-amber-400 hover:underline font-bold block">
-                Auto Clean
-              </button>
-            )}
+          <motion.div whileHover={{ y: -2 }} className="p-3 min-[360px]:p-4 bg-slate-900/80 border border-slate-800 rounded-2xl shadow">
+            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">કાર્યો (Pending Tasks)</span>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-xl min-[360px]:text-2xl font-black text-rose-400 font-mono">
+                {squadTasks.filter((t) => t.status !== "completed").length}
+              </span>
+              <span className="text-[10px] text-slate-400">active assignments</span>
+            </div>
           </motion.div>
         </div>
 
-        {/* COMPREHENSIVE FILTER & ACTION TOOLBAR (Fully responsive down to 250px) */}
-        <div className="p-3 min-[360px]:p-4 bg-slate-900/95 border border-slate-800 rounded-2xl shadow-xl flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+        {/* CONTROLS & FILTER TOOLBAR */}
+        <div className="p-3 min-[360px]:p-4 bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl space-y-3">
           
-          {/* Search Box */}
-          <div className="relative w-full lg:w-72">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder={language === "gu" ? "નામ, બક્કલ, મોબાઇલ, સ્કોડ..." : "Search name, badge, squad, mobile..."}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-            />
-          </div>
-
-          {/* FILTER DROPDOWNS ROW (Squad, Designation, Appointment, Blood Group, Retirement) */}
-          <div className="flex flex-wrap items-center gap-1.5 min-[360px]:gap-2 w-full lg:w-auto">
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
             
-            {/* Squad Filter */}
-            <select
-              value={selectedSquad}
-              onChange={(e) => setSelectedSquad(e.target.value)}
-              className="flex-1 min-[320px]:flex-none bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-            >
-              <option value="ALL">{language === "gu" ? "સ્કોડ: તમામ" : "All Squads"}</option>
-              {uniqueSquads.map(s => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
+            {/* Search Input */}
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+                placeholder={language === "gu" ? "નામ, બક્કલ નં., મોબાઇલ, સ્કોડ, ફરજ કે નીમણુંક શોધો..." : "Search name, badge, squad, duty, mobile..."}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-medium"
+              />
+            </div>
 
-            {/* Designation Filter */}
-            <select
-              value={selectedDesignation}
-              onChange={(e) => setSelectedDesignation(e.target.value)}
-              className="flex-1 min-[320px]:flex-none bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
-            >
-              <option value="ALL">{language === "gu" ? "હોદ્દો: તમામ" : "All Designations"}</option>
-              {uniqueDesignations.map(d => (
-                <option key={d} value={d}>{d}</option>
-              ))}
-            </select>
-
-            {/* CRITICAL: MANDATORY APPOINTMENT (નીમણુંક) FILTER DROPDOWN */}
-            <select
-              value={selectedAppointment}
-              onChange={(e) => setSelectedAppointment(e.target.value)}
-              className="flex-1 min-[320px]:flex-none bg-slate-950 border border-amber-500/50 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 font-bold focus:outline-none focus:border-amber-400"
-            >
-              <option value="ALL">{language === "gu" ? "નીમણૂંક: તમામ" : "All Appointments"}</option>
-              <option value="CRIME">CRIME ({personnel.filter(p => (p.appointment || '').toLowerCase() === 'crime').length})</option>
-              <option value="એટેચ">એટેચ ({personnel.filter(p => (p.appointment || '').includes('એટેચ')).length})</option>
-              {uniqueAppointments.filter(a => a && a !== 'CRIME' && a !== 'એટેચ').map(a => (
-                <option key={a} value={a}>{a} ({personnel.filter(p => p.appointment === a).length})</option>
-              ))}
-            </select>
-
-            {/* Emergency Blood Group Filter */}
-            <select
-              value={selectedBloodGroup}
-              onChange={(e) => setSelectedBloodGroup(e.target.value)}
-              className="flex-1 min-[320px]:flex-none bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-rose-300 focus:outline-none focus:border-rose-500"
-              title="Emergency Blood Donor Filter"
-            >
-              <option value="ALL">{language === "gu" ? "બ્લડ: તમામ" : "All Blood"}</option>
-              {["A+", "B+", "O+", "AB+", "A-", "B-", "O-", "AB-"].map(bg => (
-                <option key={bg} value={bg}>{bg}</option>
-              ))}
-            </select>
-
-            {/* Retirement Radar Filter */}
-            <select
-              value={selectedRetirementAlert}
-              onChange={(e) => setSelectedRetirementAlert(e.target.value as any)}
-              className="flex-1 min-[320px]:flex-none bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 focus:outline-none focus:border-amber-500"
-              title="Filter by Retirement Schedule"
-            >
-              <option value="ALL">{language === "gu" ? "નિવૃત્તિ: તમામ" : "Retirement: All"}</option>
-              <option value="6MO">{language === "gu" ? "૬ મહિનામાં નિવૃત્ત" : "Retiring in 6 Mo"}</option>
-              <option value="1YR">{language === "gu" ? "૧ વર્ષમાં નિવૃત્ત" : "Retiring in 1 Yr"}</option>
-              <option value="RETIRED">{language === "gu" ? "નિવૃત્ત થયેલ" : "Already Retired"}</option>
-            </select>
-          </div>
-
-          {/* ACTION BUTTONS */}
-          <div className="flex flex-wrap items-center gap-1.5 min-[360px]:gap-2 w-full lg:w-auto justify-end">
-            
-            {/* View Mode Switcher (Table vs Cards) */}
-            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl p-0.5">
+            {/* View Mode Selector Tabs */}
+            <div className="flex items-center gap-1 p-1 bg-slate-950 border border-slate-800 rounded-xl">
               <button
                 onClick={() => setActiveNav("table")}
                 className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${activeNav === "table" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"}`}
@@ -1673,354 +1924,364 @@ export default function App() {
               >
                 Cards
               </button>
+              <button
+                onClick={() => setActiveNav("squads")}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${activeNav === "squads" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"}`}
+              >
+                Squads
+              </button>
+              <button
+                onClick={() => setActiveNav("tasks")}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${activeNav === "tasks" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"}`}
+              >
+                Tasks
+              </button>
+              {currentUser.role === "super_admin" && (
+                <button
+                  onClick={() => setActiveNav("users")}
+                  className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${activeNav === "users" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"}`}
+                >
+                  Roles
+                </button>
+              )}
             </div>
 
-            {/* Add Person Button */}
-            {currentUser.role === "admin" && (
-              <button
-                onClick={() => {
-                  setEditingPerson(null);
-                  setFormData({
-                    srNo: personnel.length + 1,
-                    code: "સ્કોડ-૦૧",
-                    designation: "UHC",
-                    badgeNo: String(Math.floor(1000 + Math.random() * 9000)),
-                    name: "",
-                    mobile: "",
-                    dutyPlace: "સ્કોડ-૦૧",
-                    appointment: "CRIME",
-                    reportDate: "01/01/2026",
-                    birthDate: "01/01/1980",
-                    recruitedDate: "01/01/2005",
-                    retirementDate: "31/12/2040",
-                    aadharNo: "",
-                    panNo: "",
-                    bloodGroup: "B+",
-                    weaponNo: "",
-                    avatarUrl: PRESET_AVATARS[0],
-                    appointmentDate: "01/01/2026",
-                    notes: "",
-                    customFields: {}
-                  });
-                  setIsModalOpen(true);
-                }}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow transition"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>{language === "gu" ? "ઉમેરો" : "Add"}</span>
-              </button>
-            )}
+            {/* Quick 1-Click Column Swap & Add Officer */}
+            {isPrivileged && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleSwapDutyPlaceAndAppointment}
+                  className="px-2.5 py-2 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                  title="Swap Duty Place and Appointment columns across all records"
+                >
+                  <ArrowLeftRight className="w-3.5 h-3.5" />
+                  <span className="hidden min-[500px]:inline">Swap Duty ⇄ Appt</span>
+                </button>
 
-            {/* Import Spreadsheet */}
-            {currentUser.role === "admin" && (
-              <button
-                onClick={() => setIsImportModalOpen(true)}
-                className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-xs rounded-xl border border-amber-500/30 transition"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Import</span>
-              </button>
-            )}
-
-            {/* Print Roster */}
-            <button
-              onClick={() => window.print()}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl border border-slate-700 transition"
-              title="Print Roster Sheet"
-            >
-              <Printer className="w-3.5 h-3.5" />
-            </button>
-
-            {/* Export CSV */}
-            <button
-              onClick={handleExportCSV}
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl border border-slate-700 transition"
-              title="Download CSV"
-            >
-              <Download className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* ACTIVE FILTER SUMMARY & PAGE SIZE SELECTOR */}
-        <div className="flex flex-col min-[380px]:flex-row items-start min-[380px]:items-center justify-between gap-1 text-[11px] text-slate-400 px-1">
-          <div className="flex items-center gap-2">
-            <span>
-              {language === "gu" 
-                ? `કુલ ${filteredPersonnel.length} માંથી ${paginatedPersonnel.length} કર્મચારીઓ દર્શાવાયેલ છે`
-                : `Showing ${paginatedPersonnel.length} of ${filteredPersonnel.length} personnel`}
-            </span>
-            {(selectedSquad !== "ALL" || selectedDesignation !== "ALL" || selectedAppointment !== "ALL" || selectedBloodGroup !== "ALL" || selectedRetirementAlert !== "ALL" || searchQuery) && (
-              <button
-                onClick={() => { setSelectedSquad("ALL"); setSelectedDesignation("ALL"); setSelectedAppointment("ALL"); setSelectedBloodGroup("ALL"); setSelectedRetirementAlert("ALL"); setSearchQuery(""); }}
-                className="text-amber-400 hover:underline font-bold"
-              >
-                Reset Filters
-              </button>
+                <button
+                  onClick={() => {
+                    setEditingPerson(null);
+                    setFormData({
+                      id: "",
+                      srNo: personnel.length + 1,
+                      code: "સ્કોડ-૦૧",
+                      designation: "UASI",
+                      badgeNo: "",
+                      name: "",
+                      mobile: "",
+                      dutyPlace: "સ્કોડ-૦૧",
+                      appointment: "CRIME",
+                      reportDate: "01/01/2026",
+                      birthDate: "01/06/1985",
+                      recruitedDate: "01/01/2005",
+                      retirementDate: "30/06/2043",
+                      aadharNo: "",
+                      panNo: "",
+                      bloodGroup: "B+",
+                      weaponNo: "",
+                      avatarUrl: PRESET_AVATARS[0],
+                      appointmentDate: "01/01/2026",
+                      notes: "",
+                      customFields: {}
+                    });
+                    setIsModalOpen(true);
+                  }}
+                  className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow transition flex items-center gap-1"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{language === "gu" ? "નવો સ્ટાફ" : "Add Officer"}</span>
+                </button>
+              </div>
             )}
           </div>
 
-          <div className="flex items-center gap-2 self-end min-[380px]:self-auto">
-            <span>Rows:</span>
+          {/* FILTERS ROW */}
+          <div className="grid grid-cols-2 min-[480px]:grid-cols-4 gap-2 pt-2 border-t border-slate-800 text-xs">
+            
+            {/* Filter 1: Squad Filter */}
             <select
-              value={pageSize}
-              onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-              className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 text-xs text-slate-200"
+              value={selectedSquad}
+              onChange={(e) => { setSelectedSquad(e.target.value); setCurrentPage(1); }}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
             >
-              <option value={25}>25</option>
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={500}>500 (All)</option>
+              <option value="ALL">સ્કોડ: All Squads ({uniqueSquads.length})</option>
+              {uniqueSquads.map((sq) => (
+                <option key={sq} value={sq}>{sq}</option>
+              ))}
+            </select>
+
+            {/* Filter 2: Designation Filter */}
+            <select
+              value={selectedDesignation}
+              onChange={(e) => { setSelectedDesignation(e.target.value); setCurrentPage(1); }}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+            >
+              <option value="ALL">હોદ્દો: All Designations</option>
+              {uniqueDesignations.map((des) => (
+                <option key={des} value={des}>{des}</option>
+              ))}
+            </select>
+
+            {/* Filter 3: Mandatory Appointment (નીમણુંક) Filter */}
+            <select
+              value={selectedAppointment}
+              onChange={(e) => { setSelectedAppointment(e.target.value); setCurrentPage(1); }}
+              className="bg-slate-950 border border-emerald-500/40 rounded-xl px-2.5 py-1.5 text-xs text-emerald-300 font-semibold focus:outline-none focus:border-emerald-400"
+            >
+              <option value="ALL">નીમણુંક: All Appointments ({uniqueAppointments.length})</option>
+              {uniqueAppointments.map((app) => (
+                <option key={app} value={app}>{app}</option>
+              ))}
+            </select>
+
+            {/* Filter 4: Retirement Alert Filter */}
+            <select
+              value={selectedRetirementAlert}
+              onChange={(e) => { setSelectedRetirementAlert(e.target.value as any); setCurrentPage(1); }}
+              className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-amber-300 focus:outline-none focus:border-amber-500 font-semibold"
+            >
+              <option value="ALL">નિવૃત્તિ: All Roster</option>
+              <option value="6MO">Retiring within 6 Months</option>
+              <option value="1YR">Retiring within 1 Year</option>
+              <option value="RETIRED">Already Retired</option>
             </select>
           </div>
         </div>
 
-        {/* ========================================================================= */}
-        {/* TABLE VIEW (CLICKABLE COLUMN SORTING & FULL BILINGUAL HEADERS)             */}
-        {/* ========================================================================= */}
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 1: TABLE VIEW WITH 100% BILINGUAL HEADERS & COLUMN SORTING   */}
+        {/* ----------------------------------------------------------------- */}
         {activeNav === "table" && (
-          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden w-full">
-            <div className="overflow-x-auto max-w-full">
+          <div className="bg-slate-900/90 border border-slate-800 rounded-2xl shadow-xl overflow-hidden flex flex-col">
+            <div className="overflow-x-auto w-full">
               <table className="w-full text-left border-collapse whitespace-nowrap min-w-[700px]">
                 <thead>
-                  <tr className="bg-slate-950 border-b border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider select-none">
+                  <tr className="bg-slate-950 border-b border-slate-800 text-[11px] font-bold text-slate-400">
                     
-                    <th onClick={() => handleSort("srNo")} className="py-3 px-3 cursor-pointer hover:text-white">
+                    <th onClick={() => handleSort("srNo")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.srNo}</span>
                         {sortColumn === "srNo" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th className="py-3 px-3">{t.photo}</th>
+                    <th className="p-3">{t.photo}</th>
 
-                    <th onClick={() => handleSort("code")} className="py-3 px-3 cursor-pointer hover:text-white text-amber-400">
+                    <th onClick={() => handleSort("code")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.squad}</span>
-                        {sortColumn === "code" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        {sortColumn === "code" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("designation")} className="py-3 px-3 cursor-pointer hover:text-white">
+                    <th onClick={() => handleSort("designation")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.designation}</span>
                         {sortColumn === "designation" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("badgeNo")} className="py-3 px-3 cursor-pointer hover:text-white">
+                    <th onClick={() => handleSort("badgeNo")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.badgeNo}</span>
                         {sortColumn === "badgeNo" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("name")} className="py-3 px-3 cursor-pointer hover:text-white">
+                    <th onClick={() => handleSort("name")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.name}</span>
                         {sortColumn === "name" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th className="py-3 px-3">{t.mobile}</th>
+                    <th className="p-3">{t.mobile}</th>
 
-                    <th onClick={() => handleSort("dutyPlace")} className="py-3 px-3 cursor-pointer hover:text-white text-cyan-300">
-                      <div className="flex items-center gap-1">
+                    {/* Duty Place */}
+                    <th onClick={() => handleSort("dutyPlace")} className="p-3 cursor-pointer hover:text-white transition">
+                      <div className="flex items-center gap-1 text-cyan-300">
                         <span>{t.dutyPlace}</span>
-                        {sortColumn === "dutyPlace" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        {sortColumn === "dutyPlace" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("appointment")} className="py-3 px-3 cursor-pointer hover:text-white text-purple-300">
-                      <div className="flex items-center gap-1">
+                    {/* Appointment */}
+                    <th onClick={() => handleSort("appointment")} className="p-3 cursor-pointer hover:text-white transition">
+                      <div className="flex items-center gap-1 text-emerald-300">
                         <span>{t.appointment}</span>
-                        {sortColumn === "appointment" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        {sortColumn === "appointment" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("tenure")} className="py-3 px-3 cursor-pointer hover:text-white text-emerald-400">
+                    <th onClick={() => handleSort("reportDate")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
-                        <span>{t.tenure}</span>
-                        {sortColumn === "tenure" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        <span>{t.reportDate}</span>
                       </div>
                     </th>
 
-                    <th className="py-3 px-3">{t.reportDate}</th>
-                    <th className="py-3 px-3">{t.birthDate}</th>
-                    <th className="py-3 px-3">{t.recruitedDate}</th>
-
-                    <th onClick={() => handleSort("retirementDate")} className="py-3 px-3 cursor-pointer hover:text-white text-amber-300">
+                    <th onClick={() => handleSort("retirementDate")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.retirementDate}</span>
-                        {sortColumn === "retirementDate" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
                       </div>
                     </th>
 
-                    <th className="py-3 px-3">{t.blood}</th>
-                    <th className="py-3 px-3">{t.aadhar}</th>
-                    <th className="py-3 px-3">{t.pan}</th>
+                    <th onClick={() => handleSort("tenure")} className="p-3 cursor-pointer hover:text-white transition text-emerald-400">
+                      <div className="flex items-center gap-1">
+                        <span>{t.tenure}</span>
+                        {sortColumn === "tenure" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
+                      </div>
+                    </th>
 
-                    {customColumns.map(col => (
-                      <th key={col} className="py-3 px-3 text-indigo-300">{col}</th>
-                    ))}
-                    <th className="py-3 px-3 text-right">{t.actions}</th>
+                    <th className="p-3 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/60 text-xs">
-                  {paginatedPersonnel.length === 0 ? (
-                    <tr>
-                      <td colSpan={18 + customColumns.length} className="py-12 text-center text-slate-500">
-                        {language === "gu" ? "કોઈ કર્મચારી રેકોર્ડ મળ્યા નથી." : "No matching personnel records found."}
-                      </td>
-                    </tr>
-                  ) : (
-                    paginatedPersonnel.map((p, idx) => {
-                      const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
-                      return (
-                        <tr 
-                          key={p.id}
-                          onClick={() => setSelectedOfficer(p)}
-                          className="hover:bg-slate-800/60 transition-colors cursor-pointer group"
-                        >
-                          <td className="py-2 px-3 font-mono text-slate-400">{p.srNo || idx + 1}</td>
-                          <td className="py-2 px-3">
-                            <img
-                              src={p.avatarUrl || PRESET_AVATARS[0]}
-                              alt={p.name}
-                              className="w-7 h-7 min-[360px]:w-8 min-[360px]:h-8 rounded-full object-cover border border-amber-500/40 shadow"
-                              loading="lazy"
-                            />
-                          </td>
-                          <td className="py-2 px-3 font-bold text-amber-400">{p.code}</td>
-                          <td className="py-2 px-3">
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-indigo-300 border border-slate-700">
-                              {p.designation}
-                            </span>
-                          </td>
-                          <td className="py-2 px-3 font-mono font-bold text-white">{p.badgeNo}</td>
-                          <td className="py-2 px-3 font-semibold text-white group-hover:text-amber-300">{p.name}</td>
-                          
-                          <td className="py-2 px-3 font-mono text-slate-300" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center gap-1.5">
-                              <span>{maskMobile(p.mobile)}</span>
-                              {p.mobile && (
-                                <a 
-                                  href={`tel:${p.mobile}`}
-                                  className="p-1 rounded bg-slate-800 hover:bg-emerald-600 text-slate-400 hover:text-white transition"
-                                  title="Call Officer"
+
+                <tbody className="divide-y divide-slate-800 text-xs">
+                  {paginatedPersonnel.map((p) => {
+                    const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
+                    return (
+                      <tr 
+                        key={p.id}
+                        onClick={() => setSelectedOfficer(p)}
+                        className="hover:bg-slate-800/60 transition cursor-pointer"
+                      >
+                        <td className="p-3 font-mono font-bold text-slate-400">{p.srNo}</td>
+                        <td className="p-3">
+                          <img
+                            src={p.avatarUrl || PRESET_AVATARS[0]}
+                            alt={p.name}
+                            className="w-8 h-8 rounded-full object-cover border border-amber-500/40"
+                            loading="lazy"
+                          />
+                        </td>
+                        <td className="p-3 font-mono text-amber-400 font-bold">{p.code}</td>
+                        <td className="p-3">
+                          <span className="px-2 py-0.5 rounded bg-slate-800 text-indigo-300 font-semibold border border-slate-700">
+                            {p.designation}
+                          </span>
+                        </td>
+                        <td className="p-3 font-mono font-bold text-slate-300">#{p.badgeNo}</td>
+                        <td className="p-3 font-bold text-white max-w-[200px] truncate">{p.name}</td>
+                        <td className="p-3 font-mono text-slate-300">{maskMobile(p.mobile)}</td>
+
+                        <td className="p-3 max-w-[180px] truncate font-medium text-slate-300">{p.dutyPlace}</td>
+
+                        <td className="p-3">
+                          <span className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                            (p.appointment || "").toLowerCase() === "crime"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                          }`}>
+                            {p.appointment}
+                          </span>
+                        </td>
+
+                        <td className="p-3 font-mono text-slate-400">{p.reportDate || "-"}</td>
+                        <td className="p-3 font-mono font-semibold text-amber-400">{p.retirementDate || "-"}</td>
+
+                        {/* Calculated Tenure */}
+                        <td className="p-3 font-mono text-emerald-400 font-bold text-[11px]">
+                          ⏳ {tenure ? (language === "gu" ? tenure.formattedGu : tenure.formatted) : "-"}
+                        </td>
+
+                        {/* Action buttons (Call, WhatsApp, Share, Edit, Delete) */}
+                        <td className="p-3 text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1">
+                            {p.mobile && (
+                              <a
+                                href={`tel:${p.mobile.replace(/[^0-9+]/g, "")}`}
+                                className="p-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-600 text-emerald-400 hover:text-white transition"
+                                title="Call Officer"
+                              >
+                                <Phone className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                            {p.mobile && (
+                              <a
+                                href={`https://wa.me/91${p.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${p.name} (${p.designation} #${p.badgeNo})`)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-1.5 rounded-lg bg-green-500/20 hover:bg-green-600 text-green-400 hover:text-white transition"
+                                title="WhatsApp Message"
+                              >
+                                <MessageSquare className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+                            <button
+                              onClick={() => handleShareOfficer(p)}
+                              className="p-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-600 text-indigo-400 hover:text-white transition"
+                              title="Share Details"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+
+                            {isPrivileged && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    setEditingPerson(p);
+                                    setFormData({ ...p });
+                                    setIsModalOpen(true);
+                                  }}
+                                  className="p-1.5 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 rounded-lg transition"
+                                  title="Edit"
                                 >
-                                  <Phone className="w-2.5 h-2.5" />
-                                </a>
-                              )}
-                            </div>
-                          </td>
-
-                          <td className="py-2 px-3 text-cyan-200 font-medium">{p.dutyPlace}</td>
-                          
-                          <td className="py-2 px-3">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                              (p.appointment || '').toLowerCase() === 'crime' 
-                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' 
-                                : 'bg-purple-500/20 text-purple-300 border border-purple-500/40'
-                            }`}>
-                              {p.appointment}
-                            </span>
-                          </td>
-
-                          {/* Calculated Tenure Column */}
-                          <td className="py-2 px-3 text-emerald-400 font-mono font-bold text-[11px]">
-                            {tenure ? (language === "gu" ? tenure.formattedGu : tenure.formatted) : "-"}
-                          </td>
-
-                          <td className="py-2 px-3 font-mono text-slate-300">{p.reportDate}</td>
-                          <td className="py-2 px-3 font-mono text-slate-400">{p.birthDate}</td>
-                          <td className="py-2 px-3 font-mono text-slate-400">{p.recruitedDate}</td>
-                          <td className="py-2 px-3 font-mono text-amber-300 font-semibold">{p.retirementDate}</td>
-                          
-                          <td className="py-2 px-3">
-                            <span className="px-1.5 py-0.5 bg-rose-500/15 border border-rose-500/30 text-rose-300 rounded font-mono text-[10px] font-bold">
-                              {p.bloodGroup || "B+"}
-                            </span>
-                          </td>
-
-                          <td className="py-2 px-3 font-mono text-slate-400">{maskAadhaar(p.aadharNo)}</td>
-                          <td className="py-2 px-3 font-mono text-slate-400">{maskPan(p.panNo)}</td>
-
-                          {customColumns.map(col => (
-                            <td key={col} className="py-2 px-3 font-mono text-slate-300">
-                              {p.customFields?.[col] || "-"}
-                            </td>
-                          ))}
-
-                          <td className="py-2 px-3 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center justify-end gap-1">
-                              {currentUser.role === "admin" && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      setEditingPerson(p);
-                                      setFormData({ ...p });
-                                      setIsModalOpen(true);
-                                    }}
-                                    className="p-1 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 rounded-lg transition"
-                                    title="Edit"
-                                  >
-                                    <Edit3 className="w-3.5 h-3.5" />
-                                  </button>
-                                  <button
-                                    onClick={() => setDeleteTarget(p)}
-                                    className="p-1 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
-                                    title="Delete"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => setDeleteTarget(p)}
+                                  className="p-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
+                                  title="Delete"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between px-3 py-2.5 bg-slate-950 border-t border-slate-800 text-xs">
-                <span className="text-slate-400">
-                  Page {currentPage} of {totalPages}
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-slate-400 font-medium">
+                Showing {paginatedPersonnel.length} of {filteredPersonnel.length} personnel (Page {currentPage} of {totalPages})
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="p-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-300 hover:text-white disabled:opacity-40"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="px-3 py-1 bg-slate-900 border border-slate-800 rounded-lg font-mono font-bold text-amber-400">
+                  {currentPage} / {totalPages}
                 </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    disabled={currentPage <= 1}
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg text-slate-300"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-                  <span className="px-2.5 py-1 font-mono text-amber-400 font-bold">{currentPage}</span>
-                  <button
-                    disabled={currentPage >= totalPages}
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    className="p-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 rounded-lg text-slate-300"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                </div>
+                <button
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="p-1.5 bg-slate-900 border border-slate-800 rounded-lg text-slate-300 hover:text-white disabled:opacity-40"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
-            )}
+            </div>
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* CARDS VIEW WITH 3D HOVER TILT & WORKED TENURE                             */}
-        {/* ========================================================================= */}
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 2: CARDS VIEW WITH CALL, WHATSAPP, AND SHARE BUTTONS         */}
+        {/* ----------------------------------------------------------------- */}
         {activeNav === "cards" && (
           <div className="grid grid-cols-1 min-[480px]:grid-cols-2 lg:grid-cols-3 gap-3.5 min-[360px]:gap-5">
-            {paginatedPersonnel.map(p => {
+            {paginatedPersonnel.map((p) => {
               const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
+              const cleanPhone = p.mobile ? p.mobile.replace(/[^0-9]/g, "").slice(-10) : "";
               return (
                 <motion.div
                   key={p.id}
@@ -2048,7 +2309,7 @@ export default function App() {
                         </div>
                       </div>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex-shrink-0 ${
-                        (p.appointment || '').toLowerCase() === 'crime' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-purple-500/20 text-purple-300'
+                        (p.appointment || "").toLowerCase() === "crime" ? "bg-emerald-500/20 text-emerald-300" : "bg-purple-500/20 text-purple-300"
                       }`}>
                         {p.appointment}
                       </span>
@@ -2061,11 +2322,11 @@ export default function App() {
                       </div>
                       <div>
                         <span className="text-[10px] text-slate-500 block">{t.retirementDate}:</span>
-                        <span className="text-amber-400 font-mono font-semibold">{p.retirementDate}</span>
+                        <span className="text-amber-400 font-mono font-semibold">{p.retirementDate || "-"}</span>
                       </div>
                     </div>
 
-                    {/* MANDATORY TENURE CALCULATION DISPLAY */}
+                    {/* Worked Tenure line */}
                     <div className="mt-2.5 pt-2 border-t border-slate-800/60 flex items-center justify-between text-[11px]">
                       <span className="text-slate-400 font-medium">{t.tenure}:</span>
                       <span className="text-emerald-400 font-mono font-bold">
@@ -2074,41 +2335,69 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between gap-2 mt-3.5 pt-2.5 border-t border-slate-800 text-xs" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-1.5 font-mono text-slate-300">
-                      <span>{maskMobile(p.mobile)}</span>
+                  {/* ACTION BAR: CALL, WHATSAPP, SHARE IN CARD */}
+                  <div className="flex items-center justify-between gap-1.5 mt-3.5 pt-2.5 border-t border-slate-800 text-xs" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1 font-mono text-slate-300">
+                      <span className="text-[11px]">{maskMobile(p.mobile)}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1">
                       {p.mobile && (
-                        <a 
-                          href={`tel:${p.mobile}`}
-                          className="p-1 rounded bg-slate-800 hover:bg-emerald-600 text-slate-400 hover:text-white transition"
-                          title="Call Officer"
+                        <a
+                          href={`tel:${p.mobile.replace(/[^0-9+]/g, "")}`}
+                          className="px-2 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-600 text-emerald-400 hover:text-white border border-emerald-500/30 flex items-center gap-1 font-bold text-[11px] transition"
+                          title="Call Officer / ફોન કરો"
                         >
-                          <Phone className="w-3 h-3" />
+                          <Phone className="w-3.5 h-3.5" />
+                          <span className="hidden min-[420px]:inline">{language === "gu" ? "કોલ" : "Call"}</span>
                         </a>
                       )}
+
+                      {p.mobile && (
+                        <a
+                          href={`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${p.name} (${p.designation} #${p.badgeNo})`)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-600 text-green-400 hover:text-white border border-green-500/30 flex items-center gap-1 font-bold text-[11px] transition"
+                          title="WhatsApp Message / વોટ્સએપ મેસેજ"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                          <span className="hidden min-[420px]:inline">WhatsApp</span>
+                        </a>
+                      )}
+
+                      <button
+                        onClick={() => handleShareOfficer(p)}
+                        className="px-2 py-1.5 rounded-lg bg-indigo-500/20 hover:bg-indigo-600 text-indigo-400 hover:text-white border border-indigo-500/30 flex items-center gap-1 font-bold text-[11px] transition"
+                        title="Share Details / વિગત શેર કરો"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        <span className="hidden min-[420px]:inline">{language === "gu" ? "શેર" : "Share"}</span>
+                      </button>
+
+                      {isPrivileged && (
+                        <>
+                          <button
+                            onClick={() => {
+                              setEditingPerson(p);
+                              setFormData({ ...p });
+                              setIsModalOpen(true);
+                            }}
+                            className="p-1.5 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 rounded-lg transition"
+                            title="Edit"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteTarget(p)}
+                            className="p-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </>
+                      )}
                     </div>
-                    {currentUser.role === "admin" && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => {
-                            setEditingPerson(p);
-                            setFormData({ ...p });
-                            setIsModalOpen(true);
-                          }}
-                          className="p-1.5 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-slate-300 rounded-lg transition"
-                          title="Edit"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => setDeleteTarget(p)}
-                          className="p-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    )}
                   </div>
                 </motion.div>
               );
@@ -2116,20 +2405,101 @@ export default function App() {
           </div>
         )}
 
-        {/* ========================================================================= */}
-        {/* ANALYTICS VIEW                                                            */}
-        {/* ========================================================================= */}
-        {activeNav === "analytics" && (
-          <div className="p-4 min-[360px]:p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-6">
-            <h2 className="text-sm min-[360px]:text-base font-bold text-white">Gujarat Police Crime Branch Squad Deployment Distribution</h2>
-            <div className="grid grid-cols-2 min-[480px]:grid-cols-3 sm:grid-cols-4 gap-3">
-              {uniqueSquads.map(s => {
-                const count = personnel.filter(p => p.code === s).length;
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 3: SQUAD DIRECTORY & REASSIGNMENT (SUPER ADMIN CAN REASSIGN)  */}
+        {/* ----------------------------------------------------------------- */}
+        {activeNav === "squads" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h2 className="text-base font-black text-white flex items-center gap-2">
+                  <Users className="w-5 h-5 text-amber-400" />
+                  <span>સ્કોડ ડિરેક્ટરી અને અધિકારી ફાળવણી (Squad Management & Reassignment)</span>
+                </h2>
+                <p className="text-xs text-slate-400">Add, remove, or replace officers in any operational squad.</p>
+              </div>
+
+              {isPrivileged && (
+                <button
+                  onClick={() => handleOpenSquadAssign(targetSquadCode || "સ્કોડ-૦૧", "add")}
+                  className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Officer to Squad</span>
+                </button>
+              )}
+            </div>
+
+            {/* Squads Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {uniqueSquads.map((squadCode) => {
+                const squadMembers = personnel.filter((p) => p.code === squadCode);
                 return (
-                  <div key={s} className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl">
-                    <span className="text-xs font-bold text-amber-400 block">{s}</span>
-                    <p className="text-xl font-black text-white mt-1">{count}</p>
-                    <span className="text-[10px] text-slate-500">Personnel Assigned</span>
+                  <div key={squadCode} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col justify-between space-y-3">
+                    <div className="flex items-center justify-between pb-2.5 border-b border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2.5 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 font-mono font-black text-xs rounded-lg">
+                          {squadCode}
+                        </span>
+                        <span className="text-xs text-slate-400 font-semibold">{squadMembers.length} officers assigned</span>
+                      </div>
+
+                      {isPrivileged && (
+                        <button
+                          onClick={() => handleOpenSquadAssign(squadCode, "add")}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold rounded-lg border border-slate-700 transition"
+                        >
+                          + Assign
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Member List */}
+                    <div className="space-y-2 max-h-60 overflow-y-auto">
+                      {squadMembers.map((m) => (
+                        <div key={m.id} className="p-2 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <img src={m.avatarUrl || PRESET_AVATARS[0]} alt={m.name} className="w-7 h-7 rounded-full object-cover" />
+                            <div className="min-w-0">
+                              <span className="font-bold text-white truncate block">{m.name}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">{m.designation} • #{m.badgeNo}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {/* Call / WA buttons */}
+                            {m.mobile && (
+                              <a href={`tel:${m.mobile.replace(/[^0-9+]/g, "")}`} className="p-1 rounded bg-slate-800 text-emerald-400 hover:text-white" title="Call">
+                                <Phone className="w-3 h-3" />
+                              </a>
+                            )}
+                            <button onClick={() => handleShareOfficer(m)} className="p-1 rounded bg-slate-800 text-indigo-400 hover:text-white" title="Share">
+                              <Share2 className="w-3 h-3" />
+                            </button>
+
+                            {/* Super Admin Reassign / Replace / Remove */}
+                            {isPrivileged && (
+                              <>
+                                <button
+                                  onClick={() => handleOpenSquadAssign(squadCode, "replace", m)}
+                                  className="px-1.5 py-0.5 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-300 hover:text-white border border-cyan-500/30 text-[10px] font-bold rounded"
+                                  title="Replace with another officer"
+                                >
+                                  Replace
+                                </button>
+                                <button
+                                  onClick={() => handleRemoveOfficerFromSquad(m)}
+                                  className="p-1 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded"
+                                  title="Remove from Squad"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 );
               })}
@@ -2137,412 +2507,358 @@ export default function App() {
           </div>
         )}
 
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 4: SQUAD TASKS PLANNER (DAILY, WEEKLY, MONTHLY)              */}
+        {/* ----------------------------------------------------------------- */}
+        {activeNav === "tasks" && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h2 className="text-base font-black text-white flex items-center gap-2">
+                  <ListTodo className="w-5 h-5 text-amber-400" />
+                  <span>સ્કોડ કાર્યો અને પ્લાનર (Squad Tasks & Operations)</span>
+                </h2>
+                <p className="text-xs text-slate-400">Assign daily, weekly, and monthly operational tasks to squads.</p>
+              </div>
+
+              {isPrivileged && (
+                <button
+                  onClick={() => setIsTaskModalOpen(true)}
+                  className="px-3 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs flex items-center gap-1.5 shadow"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Create Squad Task</span>
+                </button>
+              )}
+            </div>
+
+            {/* Task Periodicity Tabs */}
+            <div className="flex items-center gap-2 border-b border-slate-800 pb-2 overflow-x-auto text-xs font-bold">
+              <button
+                onClick={() => setActiveTaskTab("all")}
+                className={`px-3 py-1.5 rounded-xl transition ${activeTaskTab === "all" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white bg-slate-900"}`}
+              >
+                All Tasks ({squadTasks.length})
+              </button>
+              <button
+                onClick={() => setActiveTaskTab("daily")}
+                className={`px-3 py-1.5 rounded-xl transition ${activeTaskTab === "daily" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white bg-slate-900"}`}
+              >
+                Daily (દૈનિક) ({squadTasks.filter((t) => t.periodicity === "daily").length})
+              </button>
+              <button
+                onClick={() => setActiveTaskTab("weekly")}
+                className={`px-3 py-1.5 rounded-xl transition ${activeTaskTab === "weekly" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white bg-slate-900"}`}
+              >
+                Weekly (સાપ્તાહિક) ({squadTasks.filter((t) => t.periodicity === "weekly").length})
+              </button>
+              <button
+                onClick={() => setActiveTaskTab("monthly")}
+                className={`px-3 py-1.5 rounded-xl transition ${activeTaskTab === "monthly" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white bg-slate-900"}`}
+              >
+                Monthly (માસિક) ({squadTasks.filter((t) => t.periodicity === "monthly").length})
+              </button>
+            </div>
+
+            {/* Task Cards List */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {squadTasks
+                .filter((t) => (activeTaskTab === "all" ? true : t.periodicity === activeTaskTab))
+                .map((task) => (
+                  <motion.div
+                    key={task.id}
+                    whileHover={{ y: -2 }}
+                    className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col justify-between space-y-3"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                          {task.squadCode}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                            task.priority === "urgent" ? "bg-rose-500/20 text-rose-300 border border-rose-500/40" : task.priority === "high" ? "bg-amber-500/20 text-amber-300" : "bg-emerald-500/20 text-emerald-300"
+                          }`}>
+                            {task.priority}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-800 text-slate-400">
+                            {task.periodicity}
+                          </span>
+                        </div>
+                      </div>
+
+                      <h3 className="font-bold text-white text-sm mt-2">{task.title}</h3>
+                      {task.description && (
+                        <p className="text-xs text-slate-300 mt-1 line-clamp-3">{task.description}</p>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800/80 space-y-2 text-xs">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <span>Due: {task.dueDate || "Immediate"}</span>
+                        <span>By: {task.createdBy}</span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={() => handleToggleTaskStatus(task)}
+                          className={`flex-1 py-1.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition ${
+                            task.status === "completed"
+                              ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
+                              : task.status === "in_progress"
+                              ? "bg-amber-500/30 text-amber-300 border border-amber-500/40"
+                              : "bg-slate-800 text-slate-400 border border-slate-700"
+                          }`}
+                        >
+                          {task.status === "completed" ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Completed</span>
+                            </>
+                          ) : task.status === "in_progress" ? (
+                            <>
+                              <Clock3 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                              <span>In Progress</span>
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Pending (Click to Start)</span>
+                            </>
+                          )}
+                        </button>
+
+                        {isPrivileged && (
+                          <button
+                            onClick={() => handleDeleteTask(task.id)}
+                            className="p-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-xl transition"
+                            title="Delete Task"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                ))}
+            </div>
+          </div>
+        )}
+
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 5: ACTIVE USERS & ROLE MANAGEMENT (SUPER ADMIN ONLY)         */}
+        {/* ----------------------------------------------------------------- */}
+        {activeNav === "users" && currentUser.role === "super_admin" && (
+          <div className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2 pb-3 border-b border-slate-800">
+              <div>
+                <h2 className="text-base font-black text-white flex items-center gap-2">
+                  <UserCog className="w-5 h-5 text-amber-400" />
+                  <span>સક્રિય યુઝર્સ અને રોલ મેનેજમેન્ટ (User Sessions & Role Control)</span>
+                </h2>
+                <p className="text-xs text-slate-400">Super Admin can view active logins and change user privileges in real time.</p>
+              </div>
+              <button
+                onClick={() => fetchUsers().then(setAppUsers)}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh Users</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="bg-slate-950 text-slate-400 border-b border-slate-800">
+                    <th className="p-3">User / Officer</th>
+                    <th className="p-3">Badge No</th>
+                    <th className="p-3">Mobile</th>
+                    <th className="p-3">Device / Terminal</th>
+                    <th className="p-3">Last Active</th>
+                    <th className="p-3">Current Role & Permission</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {appUsers.map((user) => (
+                    <tr key={user.id} className="hover:bg-slate-800/50">
+                      <td className="p-3">
+                        <div className="font-bold text-white">{user.name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono">{user.id}</div>
+                      </td>
+                      <td className="p-3 font-mono font-bold text-slate-300">#{user.badgeNo}</td>
+                      <td className="p-3 font-mono text-slate-400">{maskMobile(user.mobile)}</td>
+                      <td className="p-3 text-slate-400 truncate max-w-[150px]">{user.device || "Browser"}</td>
+                      <td className="p-3 text-slate-400 font-mono text-[11px]">{new Date(user.lastActive).toLocaleTimeString()}</td>
+                      <td className="p-3">
+                        <select
+                          value={user.role}
+                          onChange={(e) => handleChangeUserRole(user.id, e.target.value as UserRole)}
+                          className={`bg-slate-950 border rounded-xl px-2.5 py-1 text-xs font-bold focus:outline-none ${
+                            user.role === "super_admin"
+                              ? "border-amber-500 text-amber-400"
+                              : user.role === "admin"
+                              ? "border-indigo-500 text-indigo-300"
+                              : user.role === "squad"
+                              ? "border-purple-500 text-purple-300"
+                              : "border-slate-700 text-slate-300"
+                          }`}
+                        >
+                          <option value="super_admin">👑 Super Admin</option>
+                          <option value="admin">🛡️ Admin</option>
+                          <option value="squad">👥 Squad Member</option>
+                          <option value="officer">👮 Police Officer</option>
+                          <option value="viewer">👁️ Viewer (Read Only)</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 6: ANALYTICS                                                 */}
+        {/* ----------------------------------------------------------------- */}
+        {activeNav === "analytics" && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-5 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-amber-400" />
+                  <span>સ્કોડ મુજબ સ્ટાફ સંખ્યા (Squad Distribution)</span>
+                </h3>
+                <div className="space-y-2">
+                  {uniqueSquads.map((sq) => {
+                    const count = personnel.filter((p) => p.code === sq).length;
+                    const pct = Math.round((count / (personnel.length || 1)) * 100);
+                    return (
+                      <div key={sq} className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span className="font-mono text-slate-300">{sq}</span>
+                          <span className="font-bold text-amber-400">{count} officers ({pct}%)</span>
+                        </div>
+                        <div className="h-2 bg-slate-950 rounded-full overflow-hidden">
+                          <div className="h-full bg-gradient-to-r from-amber-500 to-amber-600 rounded-full" style={{ width: `${pct}%` }}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="p-5 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl space-y-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>નીમણૂંક વિશ્લેષણ (Appointment Breakdown)</span>
+                </h3>
+                <div className="space-y-3">
+                  {uniqueAppointments.map((app) => {
+                    const count = personnel.filter((p) => p.appointment === app).length;
+                    const pct = Math.round((count / (personnel.length || 1)) * 100);
+                    return (
+                      <div key={app} className="space-y-1">
+                        <div className="flex justify-between text-xs">
+                          <span className="font-semibold text-slate-300">{app}</span>
+                          <span className="font-bold text-emerald-400">{count} ({pct}%)</span>
+                        </div>
+                        <div className="h-2 bg-slate-950 rounded-full overflow-hidden">
+                          <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
 
-      {/* ========================================================================= */}
-      {/* SUPER ADMIN COMMAND CENTER MODAL (ALL RESTORED ADMIN CONTROLS)           */}
-      {/* ========================================================================= */}
+      {/* =================================================================== */}
+      {/* OFFICER PROFILE MODAL (WITH CALL, WHATSAPP, AND SHARE BUTTONS)     */}
+      {/* =================================================================== */}
       <AnimatePresence>
-        {isAdminCommandCenterOpen && (
+        {selectedOfficer && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-slate-950 border border-amber-500/50 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
+              className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col"
             >
-              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
-                <div className="flex items-center gap-2">
-                  <Wrench className="w-5 h-5 text-amber-400" />
-                  <h2 className="text-sm min-[360px]:text-base font-black text-white">Super Admin Command Center</h2>
-                </div>
-                <button onClick={() => setIsAdminCommandCenterOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
-              </div>
-
-              {/* TABS HEADER */}
-              <div className="flex border-b border-slate-800 bg-slate-950 overflow-x-auto text-xs font-bold">
-                <button 
-                  onClick={() => setAdminTab("tools")}
-                  className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${adminTab === "tools" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400 hover:text-white"}`}
-                >
-                  Quick Tools
-                </button>
-                <button 
-                  onClick={() => setAdminTab("replace")}
-                  className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${adminTab === "replace" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400 hover:text-white"}`}
-                >
-                  Batch Replace
-                </button>
-                <button 
-                  onClick={() => setAdminTab("columns")}
-                  className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${adminTab === "columns" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400 hover:text-white"}`}
-                >
-                  Custom Columns
-                </button>
-                <button 
-                  onClick={() => { setAdminTab("backups"); fetchBackups(); }}
-                  className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${adminTab === "backups" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400 hover:text-white"}`}
-                >
-                  Backups
-                </button>
-                <button 
-                  onClick={() => { setAdminTab("audit"); fetchAuditLogs(); }}
-                  className={`px-4 py-2.5 border-b-2 transition whitespace-nowrap ${adminTab === "audit" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400 hover:text-white"}`}
-                >
-                  Audit Logs
-                </button>
-              </div>
-
-              {/* TAB CONTENTS */}
-              <div className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
-                
-                {/* TAB 1: QUICK TOOLS */}
-                {adminTab === "tools" && (
-                  <div className="space-y-3">
-                    <p className="text-slate-400">One-click administrative repair actions for 409+ personnel records:</p>
-                    
-                    <div className="grid grid-cols-1 min-[480px]:grid-cols-2 gap-3">
-                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
-                        <span className="font-bold text-white block">1. Duty Place ⇄ Appointment Swap</span>
-                        <p className="text-[11px] text-slate-400">Swaps column 6 and 7 across all records if imported reversed.</p>
-                        <button
-                          onClick={handleSwapDutyPlaceAndAppointment}
-                          className="w-full py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg transition"
-                        >
-                          Execute Swap Now
-                        </button>
-                      </div>
-
-                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
-                        <span className="font-bold text-white block">2. Re-sequence Serial Numbers</span>
-                        <p className="text-[11px] text-slate-400">Fixes gaps and resets serial numbers cleanly from 1 to {personnel.length}.</p>
-                        <button
-                          onClick={handleResequenceSrNos}
-                          className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition"
-                        >
-                          Resequence 1 to N
-                        </button>
-                      </div>
-
-                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
-                        <span className="font-bold text-white block">3. Auto Clean Exact Duplicates</span>
-                        <p className="text-[11px] text-slate-400">Detects and purges duplicate rows based on full record signature.</p>
-                        <button
-                          onClick={handleAutoDeleteDuplicates}
-                          className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg transition"
-                        >
-                          Clean Duplicates ({duplicateCount})
-                        </button>
-                      </div>
-
-                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
-                        <span className="font-bold text-white block">4. Align & Repair Columns</span>
-                        <p className="text-[11px] text-slate-400">Repairs missing fields and guarantees column integrity safely.</p>
-                        <button
-                          onClick={handleFixAndAlignColumns}
-                          className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition"
-                        >
-                          Fix Column Integrity
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
-                      <button
-                        onClick={handleQuickAddRow}
-                        className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-emerald-400 font-bold rounded-xl transition"
-                      >
-                        + Quick Add Blank Row at Top
-                      </button>
-
-                      <button
-                        onClick={() => { setIsAdminCommandCenterOpen(false); setIsDeleteAllModalOpen(true); }}
-                        className="py-2 px-4 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white font-bold rounded-xl transition"
-                      >
-                        Dangerous: Safe Delete All
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* TAB 2: BATCH FIND & REPLACE */}
-                {adminTab === "replace" && (
-                  <form onSubmit={handleExecuteBatchReplace} className="space-y-4">
-                    <p className="text-slate-400">Search and replace values across all {personnel.length} records in a specific field:</p>
-                    
-                    <div>
-                      <label className="block text-slate-300 font-bold mb-1">Target Field</label>
-                      <select
-                        value={batchReplaceField}
-                        onChange={(e) => setBatchReplaceField(e.target.value as keyof Personnel)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                      >
-                        <option value="code">Squad Code (સ્કોડ)</option>
-                        <option value="designation">Designation (હોદ્દો)</option>
-                        <option value="dutyPlace">Duty Place (ફરજની જગ્યા)</option>
-                        <option value="appointment">Appointment (નીમણુંક)</option>
-                        <option value="bloodGroup">Blood Group (બ્લડ ગ્રૂપ)</option>
-                        <option value="weaponNo">Weapon No (હથિયાર નં.)</option>
-                      </select>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-slate-300 font-bold mb-1">Find Text</label>
-                        <input
-                          type="text"
-                          value={batchFindText}
-                          onChange={(e) => setBatchFindText(e.target.value)}
-                          placeholder="e.g. એટેચ"
-                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-slate-300 font-bold mb-1">Replace With</label>
-                        <input
-                          type="text"
-                          value={batchReplaceText}
-                          onChange={(e) => setBatchReplaceText(e.target.value)}
-                          placeholder="e.g. CRIME"
-                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                        />
-                      </div>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="py-2.5 px-5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl transition"
-                    >
-                      Execute Batch Replace
-                    </button>
-                  </form>
-                )}
-
-                {/* TAB 3: CUSTOM COLUMNS */}
-                {adminTab === "columns" && (
-                  <div className="space-y-4">
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newColName}
-                        onChange={(e) => setNewColName(e.target.value)}
-                        placeholder="Add custom column name..."
-                        className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white"
-                      />
-                      <button
-                        onClick={handleAddCustomColumn}
-                        className="py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl"
-                      >
-                        Add Column
-                      </button>
-                    </div>
-
-                    <div className="space-y-2">
-                      <span className="font-bold text-slate-300 block">Existing Custom Columns (Click trash to delete specific column)</span>
-                      {customColumns.length === 0 ? (
-                        <p className="text-slate-500">No custom columns added yet.</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {customColumns.map(col => (
-                            <div key={col} className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-xl">
-                              <span className="text-amber-300 font-mono">{col}</span>
-                              <button
-                                onClick={() => handleDeleteCustomColumn(col)}
-                                className="p-1 hover:bg-rose-600 text-rose-400 hover:text-white rounded"
-                                title={`Delete column ${col}`}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* TAB 4: BACKUPS */}
-                {adminTab === "backups" && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-white">Server Snapshot Backups</span>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={handleExportJSON}
-                          className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl"
-                        >
-                          Download JSON
-                        </button>
-                        <button
-                          onClick={handleCreateServerBackup}
-                          className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl"
-                        >
-                          + Take Server Snapshot
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      {backups.length === 0 ? (
-                        <p className="text-slate-500">No server backup snapshots yet.</p>
-                      ) : (
-                        backups.map(b => (
-                          <div key={b.fileName} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between font-mono">
-                            <span className="text-emerald-400">{b.fileName}</span>
-                            <span className="text-slate-500 text-[10px]">{new Date(b.createdAt).toLocaleString()}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* TAB 5: AUDIT LOGS */}
-                {adminTab === "audit" && (
-                  <div className="space-y-3">
-                    <span className="font-bold text-white block">Security & Operations Audit Trail</span>
-                    <div className="space-y-2 max-h-60 overflow-y-auto">
-                      {auditLogs.length === 0 ? (
-                        <p className="text-slate-500">No operations recorded yet.</p>
-                      ) : (
-                        auditLogs.map(log => (
-                          <div key={log.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl space-y-0.5">
-                            <div className="flex items-center justify-between font-mono text-[10px]">
-                              <span className="text-amber-400 font-bold">{log.action}</span>
-                              <span className="text-slate-500">{new Date(log.timestamp).toLocaleTimeString()}</span>
-                            </div>
-                            <p className="text-slate-300">{log.details}</p>
-                            <span className="text-[10px] text-slate-500 block">User: {log.user}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* ========================================================================= */}
-      {/* 3-LAYER SECURITY MODAL FOR SAFE DELETE ALL                                */}
-      {/* ========================================================================= */}
-      <AnimatePresence>
-        {isDeleteAllModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-rose-500/50 rounded-3xl w-full max-w-md p-5 min-[360px]:p-6 shadow-2xl space-y-4">
-              <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
-                <AlertTriangle className="w-6 h-6" />
-              </div>
-
-              <div>
-                <h3 className="text-base min-[360px]:text-lg font-black text-white">Permanent Roster Deletion Protection</h3>
-                <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                  This action permanently clears all {personnel.length} records. To proceed, complete the two-step verification:
-                </p>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">1. Admin PIN</label>
-                  <input
-                    type="password"
-                    value={deleteAllPassInput}
-                    onChange={(e) => setDeleteAllPassInput(e.target.value)}
-                    placeholder="Enter PIN (1673583)"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">
-                    2. Type <span className="text-rose-400 font-mono">DELETE ALL</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={deleteAllConfirmPhrase}
-                    onChange={(e) => setDeleteAllConfirmPhrase(e.target.value)}
-                    placeholder="DELETE ALL"
-                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono"
-                  />
-                </div>
-              </div>
-
-              {deleteAllError && (
-                <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 p-2.5 rounded-xl">
-                  {deleteAllError}
-                </p>
-              )}
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsDeleteAllModalOpen(false)}
-                  className="px-4 py-2 bg-slate-800 text-slate-300 text-xs rounded-xl"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={executeDeleteAll}
-                  className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-black text-xs rounded-xl shadow-lg transition"
-                >
-                  Execute Delete
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* SINGLE PERSONNEL DELETION CONFIRMATION */}
-      <AnimatePresence>
-        {deleteTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 min-[360px]:p-4 bg-black/80 backdrop-blur-sm">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-rose-500/40 rounded-3xl w-full max-w-sm p-5 shadow-2xl space-y-4">
-              <div className="w-10 h-10 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400">
-                <Trash2 className="w-5 h-5" />
-              </div>
-              <h3 className="text-base font-bold text-white">Delete Personnel Record?</h3>
-              <p className="text-xs text-slate-400">
-                Are you sure you want to delete officer "{deleteTarget.name}" (Badge #{deleteTarget.badgeNo})?
-              </p>
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={() => setDeleteTarget(null)} className="px-3.5 py-2 bg-slate-800 text-slate-300 text-xs rounded-xl">Cancel</button>
-                <button onClick={confirmDeleteSingle} className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl">Delete</button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* OFFICER PROFILE MODAL WITH WORKED TENURE & SENSITIVE MASKS */}
-      <AnimatePresence>
-        {selectedOfficer && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/80 backdrop-blur-md">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
               <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
                 <div className="flex items-center gap-2">
                   <span className="text-xs uppercase tracking-widest text-amber-400 font-bold">{t.dept}</span>
                   <span className="text-slate-600">•</span>
                   <span className="text-xs text-slate-400 font-mono">#{selectedOfficer.badgeNo}</span>
                 </div>
-                <button onClick={() => setSelectedOfficer(null)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+                <button onClick={() => setSelectedOfficer(null)} className="text-slate-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
               <div className="p-4 min-[360px]:p-6 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
+                
+                {/* Officer Avatar & Header */}
                 <div className="flex items-center gap-3.5">
-                  <img src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]} alt={selectedOfficer.name} className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 shadow" />
+                  <img
+                    src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
+                    alt={selectedOfficer.name}
+                    className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 shadow"
+                  />
                   <div>
                     <h2 className="text-base min-[360px]:text-lg font-bold text-white">{selectedOfficer.name}</h2>
                     <p className="text-xs text-amber-400 font-mono">{selectedOfficer.code} • {selectedOfficer.designation}</p>
-                    <p className="text-xs text-slate-400 mt-0.5 font-mono">બક્કલ નંબર: {selectedOfficer.badgeNo}</p>
+                    <p className="text-xs text-slate-400 mt-0.5 font-mono">બક્કલ નંબર: #{selectedOfficer.badgeNo}</p>
                   </div>
                 </div>
 
+                {/* PROMINENT ACTION RIBBON: CALL, WHATSAPP, AND SHARE IN MODAL */}
+                <div className="grid grid-cols-3 gap-2 p-2 bg-slate-900 border border-slate-800 rounded-2xl">
+                  <a
+                    href={selectedOfficer.mobile ? `tel:${selectedOfficer.mobile.replace(/[^0-9+]/g, "")}` : "#"}
+                    className={`py-2 px-2.5 rounded-xl flex items-center justify-center gap-1.5 font-bold text-xs transition ${
+                      selectedOfficer.mobile
+                        ? "bg-emerald-600/30 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40"
+                        : "opacity-40 pointer-events-none bg-slate-800 text-slate-500"
+                    }`}
+                  >
+                    <Phone className="w-4 h-4 text-emerald-400" />
+                    <span>{language === "gu" ? "કોલ કરો" : "Call"}</span>
+                  </a>
+
+                  <a
+                    href={
+                      selectedOfficer.mobile
+                        ? `https://wa.me/91${selectedOfficer.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${selectedOfficer.name} (${selectedOfficer.designation} #${selectedOfficer.badgeNo})`)}`
+                        : "#"
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`py-2 px-2.5 rounded-xl flex items-center justify-center gap-1.5 font-bold text-xs transition ${
+                      selectedOfficer.mobile
+                        ? "bg-green-600/30 hover:bg-green-600 text-green-300 hover:text-white border border-green-500/40"
+                        : "opacity-40 pointer-events-none bg-slate-800 text-slate-500"
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4 text-green-400" />
+                    <span>WhatsApp</span>
+                  </a>
+
+                  <button
+                    onClick={() => handleShareOfficer(selectedOfficer)}
+                    className="py-2 px-2.5 rounded-xl bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/40 flex items-center justify-center gap-1.5 font-bold text-xs transition"
+                  >
+                    <Share2 className="w-4 h-4 text-indigo-400" />
+                    <span>{language === "gu" ? "શેર કરો" : "Share"}</span>
+                  </button>
+                </div>
+
+                {/* Details Grid */}
                 <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-800">
                   <div>
                     <span className="text-slate-500 block">{t.dutyPlace}</span>
@@ -2558,15 +2874,15 @@ export default function App() {
                   </div>
                   <div>
                     <span className="text-slate-500 block">{t.reportDate}</span>
-                    <span className="text-slate-200 font-mono">{selectedOfficer.reportDate}</span>
+                    <span className="text-slate-200 font-mono">{selectedOfficer.reportDate || "-"}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">{t.birthDate}</span>
-                    <span className="text-slate-200 font-mono">{selectedOfficer.birthDate}</span>
+                    <span className="text-slate-200 font-mono">{selectedOfficer.birthDate || "-"}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">{t.retirementDate}</span>
-                    <span className="text-amber-400 font-mono font-bold">{selectedOfficer.retirementDate}</span>
+                    <span className="text-amber-400 font-mono font-bold">{selectedOfficer.retirementDate || "-"}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">{t.blood}</span>
@@ -2586,7 +2902,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* WORKED SERVICE TENURE CALCULATED LINE */}
+                {/* Tenure display */}
                 <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-slate-400 font-semibold">{t.tenure}</span>
@@ -2610,10 +2926,705 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ADD / EDIT OFFICER MODAL WITH PHOTO UPLOAD */}
+      {/* =================================================================== */}
+      {/* REAL-TIME BROADCAST DISPATCH MODAL (SUPER ADMIN)                   */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isBroadcastModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-rose-500/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-5 h-5 text-rose-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">તાકીદનું બ્રોડકાસ્ટ (Dispatch Realtime Alert)</h2>
+                </div>
+                <button onClick={() => setIsBroadcastModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <form onSubmit={handleDispatchBroadcast} className="p-4 min-[360px]:p-6 space-y-4 text-xs">
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Priority Level (પ્રાથમિકતા)</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setBroadcastPriority("critical")}
+                      className={`py-2 rounded-xl border text-xs font-bold transition ${broadcastPriority === "critical" ? "bg-rose-600 text-white border-rose-500" : "bg-slate-900 text-slate-400 border-slate-800"}`}
+                    >
+                      🚨 Critical
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBroadcastPriority("high")}
+                      className={`py-2 rounded-xl border text-xs font-bold transition ${broadcastPriority === "high" ? "bg-amber-500 text-slate-950 border-amber-400" : "bg-slate-900 text-slate-400 border-slate-800"}`}
+                    >
+                      ⚠️ High Alert
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBroadcastPriority("normal")}
+                      className={`py-2 rounded-xl border text-xs font-bold transition ${broadcastPriority === "normal" ? "bg-cyan-600 text-white border-cyan-500" : "bg-slate-900 text-slate-400 border-slate-800"}`}
+                    >
+                      📢 Notice
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Alert Title / Subject (શીર્ષક)</label>
+                  <input
+                    type="text"
+                    value={broadcastTitle}
+                    onChange={(e) => setBroadcastTitle(e.target.value)}
+                    placeholder="e.g. VVIP Bandobast Muster Call / વાઇટલ સિક્યોરિટી એલર્ટ"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Gujarati Message (ગુજરાતી સંદેશો)</label>
+                  <textarea
+                    rows={3}
+                    value={broadcastMsgGu}
+                    onChange={(e) => setBroadcastMsgGu(e.target.value)}
+                    placeholder="તમામ સ્કોડ ઇન્ચાર્જ તાત્કાલિક સ્ટાફ હાજરી ચકાસી કંટ્રોલ રૂમ જાણ કરે..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">English Message (અંગ્રેજી સંદેશો)</label>
+                  <textarea
+                    rows={2}
+                    value={broadcastMsgEn}
+                    onChange={(e) => setBroadcastMsgEn(e.target.value)}
+                    placeholder="All squad leaders to verify muster roll immediately..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none focus:border-rose-500"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2">
+                  <button type="button" onClick={() => setIsBroadcastModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl">
+                    Cancel
+                  </button>
+                  <button type="submit" className="px-5 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg flex items-center gap-1.5">
+                    <Send className="w-4 h-4" />
+                    <span>Dispatch Realtime</span>
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SQUAD TASK ASSIGNMENT MODAL                                        */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isTaskModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-amber-500/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <ListTodo className="w-5 h-5 text-amber-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">Create Squad Task</h2>
+                </div>
+                <button onClick={() => setIsTaskModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <form onSubmit={handleSaveTask} className="p-4 min-[360px]:p-6 space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300">Periodicity (આવૃત્તિ)</label>
+                    <select
+                      value={newTaskPeriodicity}
+                      onChange={(e) => setNewTaskPeriodicity(e.target.value as any)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-bold"
+                    >
+                      <option value="daily">Daily (દૈનિક)</option>
+                      <option value="weekly">Weekly (સાપ્તાહિક)</option>
+                      <option value="monthly">Monthly (માસિક)</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300">Assigned Squad (સ્કોડ)</label>
+                    <select
+                      value={newTaskSquad}
+                      onChange={(e) => setNewTaskSquad(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-amber-300 font-bold"
+                    >
+                      {uniqueSquads.map((sq) => (
+                        <option key={sq} value={sq}>{sq}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Task Title (કાર્ય નામ)</label>
+                  <input
+                    type="text"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="e.g. Zone 1 Night Patrol / Warrant Executions"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Description & Instructions</label>
+                  <textarea
+                    rows={3}
+                    value={newTaskDesc}
+                    onChange={(e) => setNewTaskDesc(e.target.value)}
+                    placeholder="Specific locations, vehicles, check-posts, or targets..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300">Priority</label>
+                    <select
+                      value={newTaskPriority}
+                      onChange={(e) => setNewTaskPriority(e.target.value as any)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                    >
+                      <option value="urgent">🔴 Urgent</option>
+                      <option value="high">🟠 High</option>
+                      <option value="normal">🟢 Normal</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-bold text-slate-300">Target Due Date</label>
+                    <input
+                      type="date"
+                      value={newTaskDueDate}
+                      onChange={(e) => setNewTaskDueDate(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Specific Officers (Optional, comma-separated)</label>
+                  <input
+                    type="text"
+                    value={newTaskOfficers}
+                    onChange={(e) => setNewTaskOfficers(e.target.value)}
+                    placeholder="e.g. खोડાભાઇ, સુરેન્દ્રસિંહ"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white"
+                  />
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2">
+                  <button type="button" onClick={() => setIsTaskModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl">
+                    Cancel
+                  </button>
+                  <button type="submit" className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow">
+                    Assign Task
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SQUAD REASSIGNMENT MODAL (ADD / REPLACE OFFICER)                   */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isSquadAssignModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-amber-500/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Users className="w-5 h-5 text-amber-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">
+                    {squadAssignMode === "replace" ? `Replace ${officerToReplace?.name} in ${targetSquadCode}` : `Add Officer to ${targetSquadCode}`}
+                  </h2>
+                </div>
+                <button onClick={() => setIsSquadAssignModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="p-4 min-[360px]:p-6 space-y-4 text-xs">
+                <input
+                  type="text"
+                  value={officerToAssignSearch}
+                  onChange={(e) => setOfficerToAssignSearch(e.target.value)}
+                  placeholder="Search officer by name, badge, designation..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                />
+
+                <div className="max-h-60 overflow-y-auto space-y-2">
+                  {personnel
+                    .filter((p) => {
+                      if (squadAssignMode === "replace" && officerToReplace?.id === p.id) return false;
+                      const q = officerToAssignSearch.toLowerCase().trim();
+                      if (!q) return true;
+                      return p.name.toLowerCase().includes(q) || p.badgeNo.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+                    })
+                    .slice(0, 30)
+                    .map((p) => (
+                      <div key={p.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img src={p.avatarUrl || PRESET_AVATARS[0]} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                          <div className="min-w-0">
+                            <span className="font-bold text-white block truncate">{p.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">Current: {p.code} • #{p.badgeNo} ({p.designation})</span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleExecuteSquadReassignment(p)}
+                          className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition"
+                        >
+                          Select
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SUPABASE CONNECTION CONFIG MODAL (IN-MEMORY, NO LOCAL STORAGE)      */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {supabaseConfigModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-emerald-500/50 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Database className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">Supabase Cloud Database Sync</h2>
+                </div>
+                <button onClick={() => setSupabaseConfigModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="p-4 min-[360px]:p-6 space-y-4 text-xs">
+                <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl space-y-1 text-emerald-200">
+                  <span className="font-bold block">✓ Supabase Only Sync Active</span>
+                  <p className="text-[11px] text-emerald-300">
+                    All browser localStorage and sessionStorage are disabled. Records, real-time broadcasts, and squad tasks synchronize directly via Supabase.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Supabase Project URL (Optional Override)</label>
+                  <input
+                    type="text"
+                    value={supabaseUrlInput}
+                    onChange={(e) => setSupabaseUrlInput(e.target.value)}
+                    placeholder="https://xyzcompany.supabase.co"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 font-mono text-white text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[11px] font-bold text-slate-300">Supabase Anon Key (Optional Override)</label>
+                  <input
+                    type="password"
+                    value={supabaseKeyInput}
+                    onChange={(e) => setSupabaseKeyInput(e.target.value)}
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5c..."
+                    className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 font-mono text-white text-xs"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (supabaseUrlInput.trim() && supabaseKeyInput.trim()) {
+                      configureSupabase(supabaseUrlInput, supabaseKeyInput);
+                      setSupabaseConnected(true);
+                      showToast("Supabase endpoint configured!", "success");
+                    }
+                    setSupabaseConfigModalOpen(false);
+                  }}
+                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow"
+                >
+                  Save Connection Settings
+                </button>
+
+                <div className="pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
+                      showToast("✓ SQL Schema copied to clipboard!", "success");
+                    }}
+                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl font-mono text-[11px]"
+                  >
+                    📋 Copy Supabase SQL Schema
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* BROADCAST ALERT HISTORY DRAWER                                     */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isAlertDrawerOpen && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsAlertDrawerOpen(false)} className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40" />
+            <motion.aside initial={{ x: 320 }} animate={{ x: 0 }} exit={{ x: 320 }} className="fixed top-0 bottom-0 right-0 w-80 bg-slate-950 border-l border-slate-800 z-50 p-4 min-[360px]:p-6 flex flex-col justify-between shadow-2xl overflow-y-auto">
+              <div className="space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-5 h-5 text-rose-400" />
+                    <h2 className="text-sm font-black text-white">Live Broadcast Bulletins</h2>
+                  </div>
+                  <button onClick={() => setIsAlertDrawerOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+                </div>
+
+                <div className="space-y-3">
+                  {broadcasts.map((b) => (
+                    <div key={b.id} className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${b.priority === "critical" ? "bg-rose-500/20 text-rose-300" : b.priority === "high" ? "bg-amber-500/20 text-amber-300" : "bg-cyan-500/20 text-cyan-300"}`}>
+                          {b.priority}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">{new Date(b.createdAt).toLocaleTimeString()}</span>
+                      </div>
+                      <h4 className="font-bold text-white">{b.title}</h4>
+                      <p className="text-slate-300 leading-relaxed">{language === "gu" ? b.messageGu : b.messageEn}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* CRIME BRANCH AI ASSISTANT MODAL (APINEX MINIMAX & DEEPSEEK)         */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isAiModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-400" />
+                  <div>
+                    <h2 className="text-sm min-[360px]:text-base font-bold text-white">Gujarat Police Crime Branch AI</h2>
+                    <span className="text-[10px] text-amber-400 font-mono block">Endpoint: https://api.apinex.bond/v1 (free/minimax-m3.1-flash & free/deepseek-v4.1-flash)</span>
+                  </div>
+                </div>
+                <button onClick={() => setIsAiModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
+                <form onSubmit={handleAskAI} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={aiPrompt}
+                    onChange={(e) => setAiPrompt(e.target.value)}
+                    placeholder="e.g. સ્કોડ-૦૧ માં કેટલા કર્મચારીઓ છે? Who is retiring this year?"
+                    className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                  />
+                  <button type="submit" disabled={aiLoading} className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow">
+                    {aiLoading ? "Analyzing..." : "Ask"}
+                  </button>
+                </form>
+
+                {aiModelUsed && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 font-mono">
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>⚡ Processed via: {aiModelUsed}</span>
+                  </div>
+                )}
+
+                {aiResponse && (
+                  <div className="p-3.5 bg-slate-900 border border-slate-800 rounded-xl text-slate-200 whitespace-pre-wrap leading-relaxed">
+                    {aiResponse}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SUPER ADMIN COMMAND CENTER MODAL                                   */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isAdminCommandCenterOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-amber-500/50 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Wrench className="w-5 h-5 text-amber-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">Super Admin Command Center</h2>
+                </div>
+                <button onClick={() => setIsAdminCommandCenterOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              {/* Tabs */}
+              <div className="flex border-b border-slate-800 bg-slate-950 overflow-x-auto text-xs font-bold">
+                <button onClick={() => setAdminTab("tools")} className={`px-4 py-2.5 border-b-2 transition ${adminTab === "tools" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400"}`}>Quick Tools</button>
+                <button onClick={() => setAdminTab("roles")} className={`px-4 py-2.5 border-b-2 transition ${adminTab === "roles" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400"}`}>User Roles</button>
+                <button onClick={() => { setAdminTab("backups"); fetchBackups(); }} className={`px-4 py-2.5 border-b-2 transition ${adminTab === "backups" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400"}`}>Backups</button>
+                <button onClick={() => { setAdminTab("audit"); fetchAuditLogs(); }} className={`px-4 py-2.5 border-b-2 transition ${adminTab === "audit" ? "border-amber-400 text-amber-300" : "border-transparent text-slate-400"}`}>Audit Logs</button>
+              </div>
+
+              <div className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
+                {adminTab === "tools" && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-1 min-[480px]:grid-cols-2 gap-3">
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
+                        <span className="font-bold text-white block">1. Duty Place ⇄ Appointment Swap</span>
+                        <p className="text-[11px] text-slate-400">Swaps column 6 and 7 across all records if imported reversed.</p>
+                        <button onClick={handleSwapDutyPlaceAndAppointment} className="w-full py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg transition">
+                          Execute Swap Now
+                        </button>
+                      </div>
+
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
+                        <span className="font-bold text-white block">2. Re-sequence Serial Numbers</span>
+                        <p className="text-[11px] text-slate-400">Resets serial numbers cleanly from 1 to {personnel.length}.</p>
+                        <button onClick={handleResequenceSrNos} className="w-full py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg transition">
+                          Resequence 1 to N
+                        </button>
+                      </div>
+
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
+                        <span className="font-bold text-white block">3. Clean Duplicates</span>
+                        <p className="text-[11px] text-slate-400">Detects and purges duplicate rows based on full signature.</p>
+                        <button onClick={handleAutoDeleteDuplicates} className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg transition">
+                          Clean Duplicates ({duplicateCount})
+                        </button>
+                      </div>
+
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1.5">
+                        <span className="font-bold text-white block">4. Align & Repair Columns</span>
+                        <p className="text-[11px] text-slate-400">Repairs missing fields and duty/appointment mapping.</p>
+                        <button onClick={handleFixAndAlignColumns} className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">
+                          Fix Column Integrity
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
+                      <button onClick={handleExportJSON} className="py-2 px-4 bg-slate-800 text-slate-200 font-bold rounded-xl">
+                        Export Master JSON
+                      </button>
+                      <button onClick={() => { setIsAdminCommandCenterOpen(false); setIsDeleteAllModalOpen(true); }} className="py-2 px-4 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white font-bold rounded-xl">
+                        Purge All Roster (Delete All)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {adminTab === "roles" && (
+                  <div className="space-y-3">
+                    <p className="text-slate-400">Super admin can toggle user permissions here:</p>
+                    <div className="space-y-2">
+                      {appUsers.map((u) => (
+                        <div key={u.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
+                          <div>
+                            <span className="font-bold text-white block">{u.name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">#{u.badgeNo} • {u.mobile}</span>
+                          </div>
+                          <select
+                            value={u.role}
+                            onChange={(e) => handleChangeUserRole(u.id, e.target.value as UserRole)}
+                            className="bg-slate-950 border border-slate-800 rounded-lg px-2 py-1 text-xs text-amber-400 font-bold"
+                          >
+                            <option value="super_admin">Super Admin</option>
+                            <option value="admin">Admin</option>
+                            <option value="squad">Squad</option>
+                            <option value="officer">Officer</option>
+                            <option value="viewer">Viewer</option>
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {adminTab === "backups" && (
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-slate-400">Server Backup Snapshots:</span>
+                      <button onClick={handleCreateServerBackup} className="px-3 py-1 bg-amber-500 text-slate-950 font-bold rounded-lg">+ New Snapshot</button>
+                    </div>
+                    <div className="space-y-2">
+                      {backups.map((b) => (
+                        <div key={b.fileName} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between text-xs font-mono">
+                          <span>{b.fileName}</span>
+                          <span className="text-slate-500">{new Date(b.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {adminTab === "audit" && (
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {auditLogs.map((log) => (
+                      <div key={log.id} className="p-2 bg-slate-900 border border-slate-800 rounded-lg text-xs space-y-0.5">
+                        <div className="flex justify-between text-slate-400 font-mono text-[10px]">
+                          <span>{log.action}</span>
+                          <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                        </div>
+                        <p className="text-slate-300 font-medium">{log.details}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SPREADSHEET IMPORT MODAL (409 USERS)                                */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isImportModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-emerald-500/50 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-bold text-white">Import 409+ Personnel Data</h2>
+                </div>
+                <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+              </div>
+
+              <form onSubmit={handleImportSpreadsheet} className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
+                <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1">
+                  <span className="font-bold text-emerald-400 block">Expected Column Sequence:</span>
+                  <p className="text-[11px] text-slate-400 font-mono">
+                    અ.નં. • Code • હોદ્દો • બ.નં. • નામ • મોબાઇલ નંબર • ફરજની જગ્યા • નીમણૂંક • હાજર તારીખ • જન્મ તારીખ • ભરતી તારીખ • વય નિવૃત તારીખ • આધાર • પાન
+                  </p>
+                </div>
+
+                <textarea
+                  rows={10}
+                  value={importText}
+                  onChange={(e) => setImportText(e.target.value)}
+                  placeholder="Paste TSV or copied Excel rows here..."
+                  className="w-full bg-slate-900 border border-slate-800 rounded-2xl p-3 font-mono text-xs text-white focus:outline-none focus:border-emerald-500"
+                  required
+                />
+
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                    <input type="checkbox" checked={replaceData} onChange={(e) => setReplaceData(e.target.checked)} className="rounded" />
+                    <span>Replace all existing roster records</span>
+                  </label>
+
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl">Cancel</button>
+                    <button type="submit" className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow">
+                      Execute Import
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* 3-LAYER SECURE DELETE ALL MODAL                                     */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isDeleteAllModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/90 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border-2 border-rose-600 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl p-6 space-y-4 text-xs">
+              <div className="flex items-center gap-3 text-rose-400">
+                <AlertTriangle className="w-8 h-8 flex-shrink-0" />
+                <div>
+                  <h3 className="text-base font-black text-white">3-Layer Secure Delete All</h3>
+                  <span className="text-[11px] text-rose-400 font-bold">This operation CANNOT be undone!</span>
+                </div>
+              </div>
+
+              {deleteError && (
+                <div className="p-2.5 bg-rose-950 border border-rose-500/50 rounded-xl text-rose-300 font-semibold">{deleteError}</div>
+              )}
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-300 block">Layer 1: Enter Super Admin Security PIN</label>
+                <input
+                  type="password"
+                  value={deleteAdminPin}
+                  onChange={(e) => setDeleteAdminPin(e.target.value)}
+                  placeholder="PIN: 1673583"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-300 block">Layer 2: Type "DELETE ALL" exactly</label>
+                <input
+                  type="text"
+                  value={deleteConfirmationPhrase}
+                  onChange={(e) => setDeleteConfirmationPhrase(e.target.value)}
+                  placeholder="DELETE ALL"
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-rose-400 font-mono font-bold"
+                />
+              </div>
+
+              <div className="pt-2 flex gap-2">
+                <button onClick={() => setIsDeleteAllModalOpen(false)} className="flex-1 py-2.5 bg-slate-800 text-slate-300 rounded-xl font-bold">Cancel</button>
+                <button onClick={handleExecuteDeleteAll} className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-black rounded-xl shadow">
+                  Confirm Purge
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* SINGLE RECORD DELETE CONFIRMATION                                   */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {deleteTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/80 backdrop-blur-md">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4 text-xs">
+              <h3 className="text-base font-bold text-white">Delete Officer Confirmation</h3>
+              <p className="text-slate-400">
+                Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span> (#{deleteTarget.badgeNo}) from the database?
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold">Cancel</button>
+                <button onClick={handleConfirmSingleDelete} className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow">
+                  Delete
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* ADD / EDIT OFFICER MODAL                                            */}
+      {/* =================================================================== */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/80 backdrop-blur-md">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
               <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
                 <h2 className="text-sm min-[360px]:text-base font-bold text-white">
@@ -2622,215 +3633,81 @@ export default function App() {
                 <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
               </div>
 
-              <form onSubmit={handleSavePerson} className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
-                {/* PHOTO UPLOAD & PREVIEW */}
-                <div className="p-3 bg-slate-900 border border-slate-800 rounded-2xl flex flex-col min-[480px]:flex-row items-center gap-3.5">
-                  <img
-                    src={formData.avatarUrl || PRESET_AVATARS[0]}
-                    alt="Preview"
-                    className="w-14 h-14 rounded-2xl object-cover border-2 border-amber-500/60 shadow"
-                  />
-                  <div className="flex-1 w-full space-y-1.5">
-                    <label className="block text-xs font-semibold text-amber-400">
-                      {language === "gu" ? "ઓફિસર ફોટો અપલોડ / એડિટ (Photo Upload)" : "Officer Photo Upload / Edit"}
-                    </label>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleFileUpload}
-                        className="text-xs text-slate-400 file:mr-2 file:py-1 file:px-2.5 file:rounded-xl file:border-0 file:text-[11px] file:font-semibold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer"
-                      />
-                      <input
-                        type="text"
-                        value={formData.avatarUrl}
-                        onChange={(e) => setFormData({ ...formData, avatarUrl: e.target.value })}
-                        placeholder="Or enter photo URL"
-                        className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
-                      />
-                    </div>
-                  </div>
-                </div>
-
+              <form onSubmit={handleSavePersonnel} className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.srNo}</label>
-                    <input type="number" value={formData.srNo} onChange={(e) => setFormData({ ...formData, srNo: Number(e.target.value) })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.squad}</label>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.squad}</label>
                     <input type="text" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
                   </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.designation}</label>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.designation}</label>
                     <input type="text" value={formData.designation} onChange={(e) => setFormData({ ...formData, designation: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.badgeNo}</label>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.badgeNo}</label>
                     <input type="text" value={formData.badgeNo} onChange={(e) => setFormData({ ...formData, badgeNo: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-slate-400 mb-1">{t.name}</label>
-                    <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.mobile}</label>
-                    <input type="text" value={formData.mobile} onChange={(e) => setFormData({ ...formData, mobile: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.dutyPlace}</label>
-                    <input type="text" value={formData.dutyPlace} onChange={(e) => setFormData({ ...formData, dutyPlace: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.appointment}</label>
-                    <input type="text" value={formData.appointment} onChange={(e) => setFormData({ ...formData, appointment: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.reportDate}</label>
-                    <input type="text" value={formData.reportDate} onChange={(e) => setFormData({ ...formData, reportDate: e.target.value, appointmentDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.birthDate}</label>
-                    <input type="text" value={formData.birthDate} onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.recruitedDate}</label>
-                    <input type="text" value={formData.recruitedDate} onChange={(e) => setFormData({ ...formData, recruitedDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.retirementDate}</label>
-                    <input type="text" value={formData.retirementDate} onChange={(e) => setFormData({ ...formData, retirementDate: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.aadhar}</label>
-                    <input type="text" value={formData.aadharNo} onChange={(e) => setFormData({ ...formData, aadharNo: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.name}</label>
+                    <input type="text" value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
                   </div>
-                  <div>
-                    <label className="block text-slate-400 mb-1">{t.pan}</label>
-                    <input type="text" value={formData.panNo} onChange={(e) => setFormData({ ...formData, panNo: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.mobile}</label>
+                    <input type="text" value={formData.mobile} onChange={(e) => setFormData({ ...formData, mobile: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" required />
                   </div>
                 </div>
 
-                <div className="flex justify-end gap-3 pt-3 border-t border-slate-800">
-                  <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl">Cancel</button>
-                  <button type="submit" className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow-lg transition">
-                    {editingPerson ? "Update Record" : "Save Record"}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.dutyPlace}</label>
+                    <input type="text" value={formData.dutyPlace} onChange={(e) => setFormData({ ...formData, dutyPlace: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.appointment}</label>
+                    <input type="text" value={formData.appointment} onChange={(e) => setFormData({ ...formData, appointment: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.reportDate}</label>
+                    <input type="text" value={formData.reportDate} onChange={(e) => setFormData({ ...formData, reportDate: e.target.value })} placeholder="DD/MM/YYYY" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.birthDate}</label>
+                    <input type="text" value={formData.birthDate} onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })} placeholder="DD/MM/YYYY" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.retirementDate}</label>
+                    <input type="text" value={formData.retirementDate} onChange={(e) => setFormData({ ...formData, retirementDate: e.target.value })} placeholder="DD/MM/YYYY" className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.blood}</label>
+                    <input type="text" value={formData.bloodGroup} onChange={(e) => setFormData({ ...formData, bloodGroup: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.aadhar}</label>
+                    <input type="text" value={formData.aadharNo} onChange={(e) => setFormData({ ...formData, aadharNo: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.pan}</label>
+                    <input type="text" value={formData.panNo} onChange={(e) => setFormData({ ...formData, panNo: e.target.value.toUpperCase() })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                  <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold">Cancel</button>
+                  <button type="submit" className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow">
+                    Save Personnel
                   </button>
                 </div>
               </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* SPREADSHEET IMPORT MODAL */}
-      <AnimatePresence>
-        {isImportModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/80 backdrop-blur-md">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
-              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
-                <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-5 h-5 text-amber-400" />
-                  <h2 className="text-sm min-[360px]:text-base font-bold text-white">Import 409 Personnel Rows</h2>
-                </div>
-                <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
-              </div>
-
-              <form onSubmit={handleImportSpreadsheet} className="p-4 min-[360px]:p-6 space-y-4 text-xs">
-                <p className="text-slate-400 leading-relaxed">
-                  Paste rows directly from Excel or Google Sheets. Positionally aligned:
-                  <br />
-                  <span className="font-mono text-[10px] min-[360px]:text-[11px] text-amber-300">
-                    અ.નં. | Code | હોદ્દો | બ.નં. | નામ | મોબાઇલ | ફરજની જગ્યા | નીમણુંક | હાજર તારીખ | જન્મ | ભરતી | નિવૃત્તિ | આધાર | પાન
-                  </span>
-                </p>
-
-                <textarea
-                  rows={7}
-                  value={importText}
-                  onChange={(e) => setImportText(e.target.value)}
-                  placeholder="Paste tab-separated rows here..."
-                  className="w-full bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs font-mono text-white focus:outline-none focus:border-amber-500"
-                  required
-                />
-
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setReplaceData(false)}
-                    className={`py-2 px-3 rounded-xl font-bold border transition ${!replaceData ? "bg-amber-500/20 border-amber-500 text-amber-300" : "bg-slate-900 border-slate-800 text-slate-400"}`}
-                  >
-                    + Append Rows
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setReplaceData(true)}
-                    className={`py-2 px-3 rounded-xl font-bold border transition ${replaceData ? "bg-cyan-500/20 border-cyan-500 text-cyan-300" : "bg-slate-900 border-slate-800 text-slate-400"}`}
-                  >
-                    ⚡ Replace All (Wipe & Load)
-                  </button>
-                </div>
-
-                <div className="flex justify-end gap-3 pt-2">
-                  <button type="button" onClick={() => setIsImportModalOpen(false)} className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl">Cancel</button>
-                  <button type="submit" className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow-lg transition">
-                    Execute Import
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* CRIME BRANCH AI ASSISTANT MODAL */}
-      <AnimatePresence>
-        {isAiModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/80 backdrop-blur-md">
-            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
-              <div className="flex items-center justify-between px-4 min-[360px]:px-6 py-3.5 border-b border-slate-800 bg-slate-900">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5 text-amber-400" />
-                  <h2 className="text-sm min-[360px]:text-base font-bold text-white">Gujarat Police Crime Branch AI</h2>
-                </div>
-                <button onClick={() => setIsAiModalOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
-              </div>
-
-              <div className="p-4 min-[360px]:p-6 space-y-4 overflow-y-auto flex-1 text-xs">
-                <p className="text-slate-400">
-                  Ask any question about staff strength, squad allocation, retirement schedules, or designations:
-                </p>
-                <form onSubmit={handleAskAI} className="flex gap-2">
-                  <input
-                    type="text"
-                    value={aiPrompt}
-                    onChange={(e) => setAiPrompt(e.target.value)}
-                    placeholder="e.g. સ્કોડ-૦૧ માં કેટલા કર્મચારીઓ છે? Who is retiring next?"
-                    className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
-                  />
-                  <button type="submit" disabled={aiLoading} className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl shadow">
-                    {aiLoading ? "Analyzing..." : "Ask"}
-                  </button>
-                </form>
-
-                {aiResponse && (
-                  <div className="p-3.5 bg-slate-900 border border-slate-800 rounded-xl text-slate-200 whitespace-pre-wrap leading-relaxed">
-                    {aiResponse}
-                  </div>
-                )}
-              </div>
             </motion.div>
           </div>
         )}

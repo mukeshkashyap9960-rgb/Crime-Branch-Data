@@ -1,0 +1,52 @@
+[
+  {
+    "id": "user-super-admin-01",
+    "name": "Super Admin (Crime Branch HQ)",
+    "badgeNo": "ADMIN-01",
+    "mobile": "9274583654",
+    "role": "super_admin",
+    "lastActive": "2026-10-23T02:52:28.318Z",
+    "loginTime": "2026-10-23T02:52:28.318Z",
+    "device": "Crime Branch HQ Terminal"
+  },
+  {
+    "id": "user-admin-02",
+    "name": "Inspector V.K. Parmar",
+    "badgeNo": "PI-402",
+    "mobile": "9825000101",
+    "role": "admin",
+    "lastActive": "2026-10-23T01:52:28.318Z",
+    "loginTime": "2026-10-23T00:52:28.318Z",
+    "device": "Squad Command Room"
+  },
+  {
+    "id": "user-squad-03",
+    "name": "Sub-Inspector H.D. Patel",
+    "badgeNo": "PSI-804",
+    "mobile": "9426000202",
+    "role": "squad",
+    "lastActive": "2026-10-23T02:22:28.318Z",
+    "loginTime": "2026-10-23T01:52:28.318Z",
+    "device": "Mobile Patrol Unit 01"
+  },
+  {
+    "id": "user-officer-04",
+    "name": "Rameshchandra S. Solanki",
+    "badgeNo": "770",
+    "mobile": "9824000303",
+    "role": "squad",
+    "lastActive": "2026-10-23T01:22:28.318Z",
+    "loginTime": "2026-10-22T23:52:28.318Z",
+    "device": "Station Terminal"
+  },
+  {
+    "id": "user-viewer-05",
+    "name": "Control Room Monitor",
+    "badgeNo": "VIEW-01",
+    "mobile": "9876543210",
+    "role": "viewer",
+    "lastActive": "2026-10-23T02:37:28.318Z",
+    "loginTime": "2026-10-23T02:22:28.318Z",
+    "device": "HQ Wall Monitor"
+  }
+]

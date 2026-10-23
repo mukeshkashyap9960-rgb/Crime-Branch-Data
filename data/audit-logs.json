@@ -1,0 +1,16 @@
+[
+  {
+    "id": "1792723971657",
+    "timestamp": "2026-10-23T02:52:51.657Z",
+    "action": "USER_ROLE_CHANGED",
+    "user": "Super Admin",
+    "details": "Changed role of user Rameshchandra S. Solanki to squad"
+  },
+  {
+    "id": "1792723965029",
+    "timestamp": "2026-10-23T02:52:45.029Z",
+    "action": "REALTIME_BROADCAST",
+    "user": "Super Admin",
+    "details": "Dispatched broadcast: \"Security Check Post Active\""
+  }
+]
