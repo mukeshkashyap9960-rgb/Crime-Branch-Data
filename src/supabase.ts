@@ -82,8 +82,18 @@ export function configureSupabase(url: string, anonKey: string): SupabaseClient 
   return null;
 }
 
-// Always fetch Supabase URL and Anon Key directly from the server's ENV variables
+// Initialize Supabase prioritizing Vite Environment Variables (Vercel / Static Deployment)
 export async function initSupabaseFromServer(): Promise<{ url: string; anonKey: string; isConfigured: boolean }> {
+  // 1. First try Vite environment variables directly (Vercel deployment)
+  const viteUrl = (import.meta.env.VITE_SUPABASE_URL as string) || "";
+  const viteAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string) || "";
+
+  if (viteUrl.trim() && viteAnonKey.trim()) {
+    configureSupabase(viteUrl, viteAnonKey);
+    return { url: viteUrl.trim(), anonKey: viteAnonKey.trim(), isConfigured: true };
+  }
+
+  // 2. Fall back to fetching from server Express API routes (/api/supabase/credentials)
   try {
     const res = await fetch("/api/supabase/credentials");
     if (res.ok) {
@@ -94,21 +104,35 @@ export async function initSupabaseFromServer(): Promise<{ url: string; anonKey: 
       }
     }
   } catch (err) {
-    console.warn("Could not fetch Supabase credentials from server:", err);
+    console.warn("Could not fetch Supabase credentials from server (expected on static hosting like Vercel):", err);
   }
+
+  // 3. Fall back to memory config
   return { url: memorySupabaseUrl, anonKey: memorySupabaseAnonKey, isConfigured: Boolean(memorySupabaseUrl && memorySupabaseAnonKey) };
 }
 
 export function getSupabaseConfig(): { url: string; hasKey: boolean; isConfigured: boolean } {
+  const viteUrl = (import.meta.env.VITE_SUPABASE_URL as string) || memorySupabaseUrl;
+  const viteAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string) || memorySupabaseAnonKey;
+
   return {
-    url: memorySupabaseUrl,
-    hasKey: Boolean(memorySupabaseAnonKey),
-    isConfigured: Boolean(memorySupabaseUrl && memorySupabaseAnonKey)
+    url: viteUrl,
+    hasKey: Boolean(viteAnonKey),
+    isConfigured: Boolean(viteUrl && viteAnonKey)
   };
 }
 
 export function getSupabase(): SupabaseClient | null {
   if (cachedClient) return cachedClient;
+
+  // Check Vite env variables first
+  const viteUrl = (import.meta.env.VITE_SUPABASE_URL as string) || "";
+  const viteAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string) || "";
+
+  if (viteUrl.trim() && viteAnonKey.trim()) {
+    return configureSupabase(viteUrl, viteAnonKey);
+  }
+
   if (!memorySupabaseUrl || !memorySupabaseAnonKey) return null;
   return configureSupabase(memorySupabaseUrl, memorySupabaseAnonKey);
 }
