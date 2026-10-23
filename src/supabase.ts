@@ -48,9 +48,17 @@ let realtimeChannel: any = null;
 // Track broadcast IDs that have already been received/notified to prevent repeat alerts
 const notifiedBroadcastIds = new Set<string>();
 
+// ==============================================================================
+// VERCEL / STATIC FRONTEND ENVIRONMENT VARIABLES CONFIGURATION:
+// Add these in Vercel -> Project -> Settings -> Environment Variables:
+// 
+// VITE_SUPABASE_URL=https://your-project.supabase.co
+// VITE_SUPABASE_ANON_KEY=your-real-anon-key
+// ==============================================================================
+
 export function configureSupabase(url: string, anonKey: string): SupabaseClient | null {
-  memorySupabaseUrl = (url || "").trim();
-  memorySupabaseAnonKey = (anonKey || "").trim();
+  memorySupabaseUrl = (url || import.meta.env.VITE_SUPABASE_URL || "").trim();
+  memorySupabaseAnonKey = (anonKey || import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "").trim();
   cachedClient = null;
 
   if (realtimeChannel) {
@@ -60,9 +68,12 @@ export function configureSupabase(url: string, anonKey: string): SupabaseClient 
     realtimeChannel = null;
   }
 
-  if (memorySupabaseUrl && memorySupabaseAnonKey) {
+  const targetUrl = memorySupabaseUrl;
+  const targetKey = memorySupabaseAnonKey;
+
+  if (targetUrl && targetKey) {
     try {
-      cachedClient = createClient(memorySupabaseUrl, memorySupabaseAnonKey, {
+      cachedClient = createClient(targetUrl, targetKey, {
         auth: {
           persistSession: false, // ZERO localStorage or sessionStorage
           autoRefreshToken: false
@@ -93,7 +104,7 @@ export async function initSupabaseFromServer(): Promise<{ url: string; anonKey: 
     return { url: viteUrl.trim(), anonKey: viteAnonKey.trim(), isConfigured: true };
   }
 
-  // 2. Fall back to fetching from server Express API routes (/api/supabase/credentials)
+  // 2. De-prioritized fallback to fetching from server Express API routes (/api/supabase/credentials)
   try {
     const res = await fetch("/api/supabase/credentials");
     if (res.ok) {
@@ -104,7 +115,7 @@ export async function initSupabaseFromServer(): Promise<{ url: string; anonKey: 
       }
     }
   } catch (err) {
-    console.warn("Could not fetch Supabase credentials from server (expected on static hosting like Vercel):", err);
+    // 404 on Vercel is expected and safely ignored
   }
 
   // 3. Fall back to memory config
