@@ -23,6 +23,7 @@ const AUDIT_LOGS_FILE = path.join(DATA_DIR, "audit-logs.json");
 const BROADCASTS_FILE = path.join(DATA_DIR, "broadcasts.json");
 const SQUAD_TASKS_FILE = path.join(DATA_DIR, "squad-tasks.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
+const CHAT_FILE = path.join(DATA_DIR, "chat-messages.json");
 const SUPABASE_CONFIG_FILE = path.join(DATA_DIR, "supabase-config.json");
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -185,6 +186,44 @@ app.delete("/api/squad-tasks/:id", (req, res) => {
       tasks = tasks.filter((t: any) => t.id !== id);
       fs.writeFileSync(SQUAD_TASKS_FILE, JSON.stringify(tasks, null, 2));
     }
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Realtime Chat API
+// ---------------------------------------------------------------------------
+app.get("/api/chat", (_req, res) => {
+  try {
+    if (fs.existsSync(CHAT_FILE)) {
+      const messages = JSON.parse(fs.readFileSync(CHAT_FILE, "utf-8"));
+      return res.json({ messages });
+    }
+    return res.json({ messages: [] });
+  } catch (e) {
+    res.json({ messages: [] });
+  }
+});
+
+app.post("/api/chat", (req, res) => {
+  try {
+    const msg = req.body;
+    if (!msg || !msg.id || !msg.message) {
+      return res.status(400).json({ error: "Invalid message payload." });
+    }
+    let messages: any[] = [];
+    if (fs.existsSync(CHAT_FILE)) {
+      try {
+        messages = JSON.parse(fs.readFileSync(CHAT_FILE, "utf-8"));
+      } catch (e) {
+        messages = [];
+      }
+    }
+    messages.push(msg);
+    if (messages.length > 200) messages = messages.slice(-200);
+    fs.writeFileSync(CHAT_FILE, JSON.stringify(messages, null, 2));
     res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
