@@ -577,7 +577,131 @@ export async function updateUserRoleInSupabase(
 }
 
 // ---------------------------------------------------------------------------
-// 5. SQL SCHEMA HELPER FOR USER
+// 5. REALTIME CHAT MESSAGES
+// ---------------------------------------------------------------------------
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: string;
+  message: string;
+  createdAt: string;
+}
+
+export async function fetchChatMessages(): Promise<ChatMessage[]> {
+  const client = getSupabase();
+  if (client) {
+    try {
+      const { data, error } = await client.from("chat_messages").select("*").order("created_at", { ascending: true });
+      if (!error && Array.isArray(data)) {
+        return data.map((m: any) => ({
+          id: m.id,
+          senderId: m.sender_id || m.senderId,
+          senderName: m.sender_name || m.senderName,
+          senderRole: m.sender_role || m.senderRole,
+          message: m.message,
+          createdAt: m.created_at || m.createdAt
+        }));
+      }
+    } catch (e) {}
+  }
+
+  try {
+    const res = await fetch("/api/chat");
+    if (res.ok) {
+      const json = await res.json();
+      if (Array.isArray(json.messages)) {
+        return json.messages.map((m: any) => ({
+          id: m.id,
+          senderId: m.senderId || m.sender_id,
+          senderName: m.senderName || m.sender_name,
+          senderRole: m.senderRole || m.sender_role,
+          message: m.message,
+          createdAt: m.createdAt || m.created_at
+        }));
+      }
+    }
+  } catch (e) {}
+  return [];
+}
+
+export async function sendChatMessage(msg: ChatMessage): Promise<{ success: boolean }> {
+  const client = getSupabase();
+  if (client) {
+    try {
+      await client.from("chat_messages").insert({
+        id: msg.id,
+        sender_id: msg.senderId,
+        sender_name: msg.senderName,
+        sender_role: msg.senderRole,
+        message: msg.message,
+        created_at: msg.createdAt
+      });
+    } catch (e) {}
+  }
+
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(msg)
+    });
+    return { success: res.ok };
+  } catch (e) {
+    return { success: false };
+  }
+}
+
+export function subscribeToChatMessages(onNewMessage: (msg: ChatMessage) => void): () => void {
+  const client = getSupabase();
+  if (!client) {
+    // Polling fallback
+    const interval = setInterval(async () => {
+      try {
+        const list = await fetchChatMessages();
+        if (list.length > 0) {
+          onNewMessage(list[list.length - 1]);
+        }
+      } catch (e) {}
+    }, 4000);
+    return () => clearInterval(interval);
+  }
+
+  try {
+    const channel = client
+      .channel("crime_branch_chat")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "chat_messages" },
+        (payload) => {
+          if (payload?.new) {
+            const raw = payload.new as any;
+            const m: ChatMessage = {
+              id: raw.id,
+              senderId: raw.sender_id || raw.senderId,
+              senderName: raw.sender_name || raw.senderName,
+              senderRole: raw.sender_role || raw.senderRole,
+              message: raw.message,
+              createdAt: raw.created_at || raw.createdAt
+            };
+            onNewMessage(m);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      try {
+        client.removeChannel(channel);
+      } catch (e) {}
+    };
+  } catch (err) {
+    return () => {};
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6. SQL SCHEMA HELPER FOR USER
 // ---------------------------------------------------------------------------
 export const SUPABASE_SQL_SCHEMA = `-- Crime Branch Gujarat Police: Supabase Database Schema & Setup Instructions
 -- 1. Get your Supabase Project URL and Publishable / Anon Key from your Supabase Dashboard (Settings > API).

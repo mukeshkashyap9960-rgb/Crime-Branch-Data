@@ -405,13 +405,13 @@ app.get("/api/backups", (_req, res) => {
 // ---------------------------------------------------------------------------
 function getEffectiveSupabaseCredentials() {
   let url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
-  let anonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+  let anonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 
   if ((!url || !anonKey) && fs.existsSync(SUPABASE_CONFIG_FILE)) {
     try {
       const saved = JSON.parse(fs.readFileSync(SUPABASE_CONFIG_FILE, "utf-8"));
       if (!url && saved.url) url = saved.url;
-      if (!anonKey && saved.anonKey) anonKey = saved.anonKey;
+      if (!anonKey && (saved.anonKey || saved.publishableKey)) anonKey = saved.anonKey || saved.publishableKey;
     } catch (e) {}
   }
   return {

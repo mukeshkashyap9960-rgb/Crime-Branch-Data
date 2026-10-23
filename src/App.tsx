@@ -18,6 +18,7 @@ import {
   RealtimeBroadcast,
   SquadTask,
   AppUserRecord,
+  ChatMessage,
   initSupabaseFromServer,
   subscribeToRealtimeBroadcasts,
   dispatchRealtimeBroadcast,
@@ -30,6 +31,9 @@ import {
   fetchUsers,
   recordUserSession,
   updateUserRoleInSupabase,
+  fetchChatMessages,
+  sendChatMessage,
+  subscribeToChatMessages,
   configureSupabase,
   getSupabaseConfig,
   SUPABASE_SQL_SCHEMA
@@ -367,10 +371,12 @@ export default function App() {
   const [sortColumn, setSortColumn] = useState<keyof Personnel | "tenure" | null>("srNo");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
-  // Navigation: table | cards | squads | tasks | users | analytics
-  const [activeNav, setActiveNav] = useState<"table" | "cards" | "squads" | "tasks" | "users" | "analytics">("table");
+  // Navigation: table | cards | squads | tasks | users | analytics | chat
+  const [activeNav, setActiveNav] = useState<"table" | "cards" | "squads" | "tasks" | "users" | "analytics" | "chat">("table");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInputText, setChatInputText] = useState("");
   const [selectedSquad, setSelectedSquad] = useState("ALL");
   const [selectedDesignation, setSelectedDesignation] = useState("ALL");
   const [selectedAppointment, setSelectedAppointment] = useState("ALL");
@@ -564,15 +570,46 @@ export default function App() {
         }
       });
 
-      // 5. Load Squad Tasks and App Users from Supabase
+      // 5. Load Squad Tasks, App Users, and Chat Messages from Supabase
       fetchSquadTasks().then(setSquadTasks);
       fetchUsers().then(setAppUsers);
+      fetchChatMessages().then(setChatMessages);
+
+      const unsubChat = subscribeToChatMessages((newMsg) => {
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === newMsg.id)) return prev;
+          return [...prev, newMsg];
+        });
+      });
 
       return () => {
         unsubBroadcasts();
+        unsubChat();
       };
     });
-  }, []);
+  }, [],);
+
+  const handleSendChatMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInputText.trim() || !currentUser) return;
+
+    const msg: ChatMessage = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      senderId: currentUser.id || currentUser.badgeNo,
+      senderName: currentUser.name,
+      senderRole: currentUser.role,
+      message: chatInputText.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    setChatInputText("");
+    const res = await sendChatMessage(msg);
+    if (res.success) {
+      setChatMessages((prev) => [...prev.filter((m) => m.id !== msg.id), msg]);
+    } else {
+      showToast("Failed to send message", "error");
+    }
+  };
 
   // Fetch audit logs & backups
   const fetchAuditLogs = async () => {
@@ -1825,6 +1862,15 @@ export default function App() {
                     <Activity className="w-4 h-4" />
                     <span>{language === "gu" ? "ક્રાઇમ બ્રાન્ચ એનાલિટિક્સ" : "Staff Analytics"}</span>
                   </button>
+
+                  {/* View 7: Realtime Team Chat Room */}
+                  <button
+                    onClick={() => { setActiveNav("chat"); setIsSidebarOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition ${activeNav === "chat" ? "bg-amber-500 text-slate-950" : "text-slate-300 hover:bg-slate-900"}`}
+                  >
+                    <MessageSquare className="w-4 h-4" />
+                    <span>{language === "gu" ? "ટીમ ચેટ રૂમ (રિયલ ટાઇમ)" : "Real-Time Team Chat Room"}</span>
+                  </button>
                 </div>
 
                 {/* Operations Section */}
@@ -2820,6 +2866,75 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ----------------------------------------------------------------- */}
+        {/* VIEW 7: REAL-TIME TEAM CHAT ROOM (SUPABASE SYNCED)                */}
+        {/* ----------------------------------------------------------------- */}
+        {activeNav === "chat" && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden flex flex-col h-[70vh]">
+            <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
+                  <MessageSquare className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-black text-white">ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ - લાઈવ ટીમ ચેટ રૂમ</h2>
+                  <p className="text-[10px] text-emerald-400 font-mono">⚡ Real-Time Supabase Sync Active</p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 bg-slate-900 text-slate-300 text-xs font-bold rounded-xl border border-slate-800">
+                Messages: {chatMessages.length}
+              </span>
+            </div>
+
+            {/* Messages Scroll Area */}
+            <div className="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-950/60">
+              {chatMessages.length === 0 ? (
+                <div className="text-center py-20 text-slate-500 text-xs">
+                  No chat messages yet. Start conversation with your squad or command room!
+                </div>
+              ) : (
+                chatMessages.map((msg) => {
+                  const isMe = currentUser && (msg.senderId === currentUser.id || msg.senderName === currentUser.name);
+                  return (
+                    <div key={msg.id} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
+                      <div className="flex items-center gap-1.5 mb-0.5 text-[10px] text-slate-400">
+                        <span className="font-bold text-amber-400">{msg.senderName}</span>
+                        <span className="px-1.5 py-0.2 bg-slate-800 text-slate-300 rounded font-mono uppercase">{msg.senderRole}</span>
+                        <span>{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <div className={`p-3 rounded-2xl text-xs max-w-md shadow-md ${
+                        isMe 
+                          ? "bg-amber-500 text-slate-950 font-medium rounded-tr-none" 
+                          : "bg-slate-900 text-slate-100 border border-slate-800 rounded-tl-none"
+                      }`}>
+                        {msg.message}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Message Input Form */}
+            <form onSubmit={handleSendChatMessage} className="p-3 bg-slate-950 border-t border-slate-800 flex gap-2">
+              <input
+                type="text"
+                value={chatInputText}
+                onChange={(e) => setChatInputText(e.target.value)}
+                placeholder={language === "gu" ? "સંદેશ લખો અને મોકલો..." : "Type operational message..."}
+                className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500"
+              />
+              <button
+                type="submit"
+                className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs rounded-xl shadow flex items-center gap-1.5 transition"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Send</span>
+              </button>
+            </form>
           </div>
         )}
 
