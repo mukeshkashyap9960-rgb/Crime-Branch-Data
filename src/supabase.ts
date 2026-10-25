@@ -330,56 +330,81 @@ export async function syncPersonnelToSupabase(
 
   if (client) {
     try {
-      // Upsert full personnel payload with all fields: names, duty places, photos, appointments, dates
-      const rows = personnelList.map((p) => ({
-        id: p.id,
-        sr_no: p.srNo,
-        code: p.code,
-        designation: p.designation,
-        badge_no: p.badgeNo,
-        name: p.name,
-        mobile: p.mobile,
-        duty_place: p.dutyPlace,
-        appointment: p.appointment,
-        report_date: p.reportDate,
-        birth_date: p.birthDate,
-        recruited_date: p.recruitedDate,
-        retirement_date: p.retirementDate,
-        aadhar_no: p.aadharNo,
-        pan_no: p.panNo,
-        blood_group: p.bloodGroup,
-        weapon_no: p.weaponNo,
-        avatar_url: p.avatarUrl,
-        notes: p.notes || "",
-        custom_fields: p.customFields || {}
-      }));
+      // 1. Deduplicate in-memory to prevent multiple rows for the same badge/person
+      const seen = new Set<string>();
+      const uniqueList: Personnel[] = [];
+
+      personnelList.forEach((p) => {
+        const badge = (p.badgeNo || "").trim();
+        const name = (p.name || "").trim();
+        const key = badge ? `badge:${badge}` : `name:${name}|mob:${p.mobile || ""}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        uniqueList.push(p);
+      });
+
+      // 2. Assign stable deterministic ID based on badge number so upserts update existing records in-place
+      const rows = uniqueList.map((p, idx) => {
+        const cleanBadge = (p.badgeNo || "").trim();
+        const stableId = cleanBadge 
+          ? `officer-${cleanBadge.replace(/[^a-zA-Z0-9]/g, "-")}` 
+          : (p.id && !p.id.startsWith("imp-") ? p.id : `officer-row-${idx + 1}`);
+
+        return {
+          id: stableId,
+          sr_no: idx + 1,
+          code: p.code,
+          designation: p.designation,
+          badge_no: p.badgeNo,
+          name: p.name,
+          mobile: p.mobile,
+          duty_place: p.dutyPlace,
+          appointment: p.appointment,
+          report_date: p.reportDate,
+          birth_date: p.birthDate,
+          recruited_date: p.recruitedDate,
+          retirement_date: p.retirementDate,
+          aadhar_no: p.aadharNo,
+          pan_no: p.panNo,
+          blood_group: p.bloodGroup,
+          weapon_no: p.weaponNo,
+          avatar_url: p.avatarUrl,
+          notes: p.notes || "",
+          custom_fields: p.customFields || {}
+        };
+      });
 
       const { error } = await client.from("crime_branch_personnel").upsert(rows, { onConflict: "id" });
       if (!error) {
-        console.log(`Saved ${rows.length} personnel records into Supabase table 'crime_branch_personnel'`);
+        console.log(`Saved ${rows.length} unique personnel records into Supabase table 'crime_branch_personnel'`);
+        return { success: true, count: rows.length };
       } else {
-        console.warn("Supabase upsert note:", error.message);
+        console.warn("Supabase personnel upsert error:", error.message);
       }
     } catch (e: any) {
       console.warn("Supabase personnel upsert exception:", e?.message);
     }
   }
 
-  // Backup sync to server relay
-  try {
-    const res = await fetch("/api/personnel", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        personnel: personnelList,
-        user,
-        reason: "Synced to Supabase table crime_branch_personnel"
-      })
-    });
-    return { success: res.ok, count: personnelList.length };
-  } catch (err: any) {
-    return { success: false, count: 0, error: err.message };
+  // Fallback for local Express dev server if client is not configured
+  if (!client) {
+    try {
+      const res = await fetch("/api/personnel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          personnel: personnelList,
+          user,
+          reason: "Synced to Supabase table crime_branch_personnel"
+        })
+      });
+      return { success: res.ok, count: personnelList.length };
+    } catch (err: any) {
+      return { success: false, count: 0, error: err.message };
+    }
   }
+
+  return { success: false, count: 0 };
 }
 
 export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
@@ -392,44 +417,63 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
         .order("sr_no", { ascending: true });
 
       if (!error && Array.isArray(data) && data.length > 0) {
-        return data.map((r: any) => ({
-          id: r.id,
-          srNo: r.sr_no,
-          code: r.code || "",
-          designation: r.designation || "",
-          badgeNo: r.badge_no || "",
-          name: r.name || "",
-          mobile: r.mobile || "",
-          dutyPlace: r.duty_place || "",
-          appointment: r.appointment || "",
-          reportDate: r.report_date || "",
-          birthDate: r.birth_date || "",
-          recruitedDate: r.recruited_date || "",
-          retirementDate: r.retirement_date || "",
-          aadharNo: r.aadhar_no || "",
-          panNo: r.pan_no || "",
-          bloodGroup: r.blood_group || "B+",
-          weaponNo: r.weapon_no || "",
-          avatarUrl: r.avatar_url || "",
-          notes: r.notes || "",
-          customFields: r.custom_fields || {}
-        }));
+        // Automatic deduplication by badge number or name/mobile
+        // This guarantees that even if Supabase table has 1000 duplicate rows from previous imports,
+        // only the exact 409 unique real officers are loaded.
+        const seen = new Set<string>();
+        const uniquePersonnel: Personnel[] = [];
+
+        data.forEach((r: any) => {
+          const badge = (r.badge_no || "").trim();
+          const name = (r.name || "").trim();
+          const dedupeKey = badge ? `badge:${badge}` : `name:${name}|mob:${r.mobile || ""}`;
+
+          if (seen.has(dedupeKey)) return;
+          seen.add(dedupeKey);
+
+          uniquePersonnel.push({
+            id: r.id || (badge ? `officer-${badge}` : `p-${uniquePersonnel.length + 1}`),
+            srNo: uniquePersonnel.length + 1,
+            code: r.code || "",
+            designation: r.designation || "",
+            badgeNo: r.badge_no || "",
+            name: r.name || "",
+            mobile: r.mobile || "",
+            dutyPlace: r.duty_place || "",
+            appointment: r.appointment || "",
+            reportDate: r.report_date || "",
+            birthDate: r.birth_date || "",
+            recruitedDate: r.recruited_date || "",
+            retirementDate: r.retirement_date || "",
+            aadharNo: r.aadhar_no || "",
+            panNo: r.pan_no || "",
+            bloodGroup: r.blood_group || "B+",
+            weaponNo: r.weapon_no || "",
+            avatarUrl: r.avatar_url || "",
+            notes: r.notes || "",
+            customFields: r.custom_fields || {}
+          });
+        });
+
+        return uniquePersonnel;
       }
     } catch (e) {
       console.warn("Failed to load from Supabase table crime_branch_personnel:", e);
     }
   }
 
-  // Fallback to server DB
-  try {
-    const res = await fetch("/api/personnel");
-    if (res.ok) {
-      const json = await res.json();
-      if (Array.isArray(json.personnel) && json.personnel.length > 0) {
-        return json.personnel;
+  // Fallback to local server DB if client is not configured
+  if (!client) {
+    try {
+      const res = await fetch("/api/personnel");
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.personnel) && json.personnel.length > 0) {
+          return json.personnel;
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
   return null;
 }
 
