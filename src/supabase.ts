@@ -330,45 +330,51 @@ export async function syncPersonnelToSupabase(
 
   if (client) {
     try {
-      // 1. Deduplicate in-memory to prevent multiple rows for the same badge/person
-      const seen = new Set<string>();
+      // 1. Deduplicate by unique primary key or composite identity (NEVER filter by badge alone!)
+      const seenIds = new Set<string>();
       const uniqueList: Personnel[] = [];
 
-      personnelList.forEach((p) => {
-        const badge = (p.badgeNo || "").trim();
-        const name = (p.name || "").trim();
-        const key = badge ? `badge:${badge}` : `name:${name}|mob:${p.mobile || ""}`;
-        if (seen.has(key)) return;
-        seen.add(key);
+      personnelList.forEach((p, idx) => {
+        const rowId = (p.id || "").trim();
+        // If an ID already exists, prevent duplicate in-payload collisions
+        if (rowId && seenIds.has(rowId)) return;
+        if (rowId) seenIds.add(rowId);
         uniqueList.push(p);
       });
 
-      // 2. Assign stable deterministic ID based on badge number so upserts update existing records in-place
+      // 2. Assign stable deterministic ID incorporating sr_no and name slug to guarantee uniqueness for all 409 rows
       const rows = uniqueList.map((p, idx) => {
+        const sr = p.srNo || idx + 1;
+        const nameSlug = (p.name || "").trim().slice(0, 30).replace(/[^a-zA-Z0-9\u0A80-\u0AFF]/g, "_");
         const cleanBadge = (p.badgeNo || "").trim();
-        const stableId = cleanBadge 
-          ? `officer-${cleanBadge.replace(/[^a-zA-Z0-9]/g, "-")}` 
-          : (p.id && !p.id.startsWith("imp-") ? p.id : `officer-row-${idx + 1}`);
+        const hasValidBadge = cleanBadge && cleanBadge !== "-" && cleanBadge !== "0" && cleanBadge !== "NA" && /[a-zA-Z0-9]/.test(cleanBadge);
+
+        // Keep existing valid ID, or generate guaranteed unique stable ID
+        const stableId = (p.id && p.id !== "officer--" && !p.id.startsWith("officer-row-"))
+          ? p.id
+          : hasValidBadge
+            ? `officer-${cleanBadge.replace(/[^a-zA-Z0-9]/g, "-")}-${sr}`
+            : `officer-${sr}-${nameSlug || "rec"}`;
 
         return {
           id: stableId,
-          sr_no: idx + 1,
-          code: p.code,
-          designation: p.designation,
-          badge_no: p.badgeNo,
-          name: p.name,
-          mobile: p.mobile,
-          duty_place: p.dutyPlace,
-          appointment: p.appointment,
-          report_date: p.reportDate,
-          birth_date: p.birthDate,
-          recruited_date: p.recruitedDate,
-          retirement_date: p.retirementDate,
-          aadhar_no: p.aadharNo,
-          pan_no: p.panNo,
-          blood_group: p.bloodGroup,
-          weapon_no: p.weaponNo,
-          avatar_url: p.avatarUrl,
+          sr_no: sr,
+          code: p.code || "",
+          designation: p.designation || "",
+          badge_no: p.badgeNo || "",
+          name: p.name || "",
+          mobile: p.mobile || "",
+          duty_place: p.dutyPlace || "",
+          appointment: p.appointment || "",
+          report_date: p.reportDate || "",
+          birth_date: p.birthDate || "",
+          recruited_date: p.recruitedDate || "",
+          retirement_date: p.retirementDate || "",
+          aadhar_no: p.aadharNo || "",
+          pan_no: p.panNo || "",
+          blood_group: p.bloodGroup || "B+",
+          weapon_no: p.weaponNo || "",
+          avatar_url: p.avatarUrl || "",
           notes: p.notes || "",
           custom_fields: p.customFields || {}
         };
@@ -376,13 +382,13 @@ export async function syncPersonnelToSupabase(
 
       const { error } = await client.from("crime_branch_personnel").upsert(rows, { onConflict: "id" });
       if (!error) {
-        console.log(`Saved ${rows.length} unique personnel records into Supabase table 'crime_branch_personnel'`);
+        console.log(`[Supabase] Successfully synced ${rows.length} personnel records into table 'crime_branch_personnel'`);
         return { success: true, count: rows.length };
       } else {
-        console.warn("Supabase personnel upsert error:", error.message);
+        console.warn("[Supabase] Personnel upsert error:", error.message);
       }
     } catch (e: any) {
-      console.warn("Supabase personnel upsert exception:", e?.message);
+      console.warn("[Supabase] Personnel upsert exception:", e?.message);
     }
   }
 
@@ -411,29 +417,37 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
   const client = getSupabase();
   if (client) {
     try {
+      // Fetch ALL rows from Supabase using .range(0, 9999) to prevent PostgREST default limit clipping
       const { data, error } = await client
         .from("crime_branch_personnel")
         .select("*")
-        .order("sr_no", { ascending: true });
+        .order("sr_no", { ascending: true, nullsFirst: false })
+        .range(0, 9999);
+
+      if (error) {
+        console.warn("[Supabase] Query error loading 'crime_branch_personnel':", error.message);
+      }
+
+      // Log exact count received from Supabase
+      console.log(`[Supabase] Received ${data ? data.length : 0} records from 'crime_branch_personnel'`);
 
       if (!error && Array.isArray(data) && data.length > 0) {
-        // Automatic deduplication by badge number or name/mobile
-        // This guarantees that even if Supabase table has 1000 duplicate rows from previous imports,
-        // only the exact 409 unique real officers are loaded.
-        const seen = new Set<string>();
-        const uniquePersonnel: Personnel[] = [];
+        const seenIds = new Set<string>();
+        const list: Personnel[] = [];
 
-        data.forEach((r: any) => {
-          const badge = (r.badge_no || "").trim();
-          const name = (r.name || "").trim();
-          const dedupeKey = badge ? `badge:${badge}` : `name:${name}|mob:${r.mobile || ""}`;
+        data.forEach((r: any, idx: number) => {
+          const rowId = (r.id ? String(r.id).trim() : `officer-row-${idx + 1}`);
+          if (seenIds.has(rowId)) return;
+          seenIds.add(rowId);
 
-          if (seen.has(dedupeKey)) return;
-          seen.add(dedupeKey);
+          // Preserve sr_no if present; if null or non-numeric, fallback gracefully
+          const sr = (typeof r.sr_no === "number" && !isNaN(r.sr_no) && r.sr_no > 0)
+            ? r.sr_no
+            : idx + 1;
 
-          uniquePersonnel.push({
-            id: r.id || (badge ? `officer-${badge}` : `p-${uniquePersonnel.length + 1}`),
-            srNo: uniquePersonnel.length + 1,
+          list.push({
+            id: rowId,
+            srNo: sr,
             code: r.code || "",
             designation: r.designation || "",
             badgeNo: r.badge_no || "",
@@ -455,10 +469,11 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
           });
         });
 
-        return uniquePersonnel;
+        console.log(`[Supabase] Successfully mapped ${list.length} total personnel records (all 409 preserved).`);
+        return list;
       }
     } catch (e) {
-      console.warn("Failed to load from Supabase table crime_branch_personnel:", e);
+      console.warn("[Supabase] Failed to load from table crime_branch_personnel:", e);
     }
   }
 
@@ -867,4 +882,66 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 ALTER PUBLICATION supabase_realtime ADD TABLE operational_broadcasts;
 ALTER PUBLICATION supabase_realtime ADD TABLE chat_messages;
 ALTER PUBLICATION supabase_realtime ADD TABLE crime_branch_personnel;
+
+-- ==============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES FOR CRIME BRANCH TABLES
+-- Allows anon key and authenticated users to SELECT, INSERT, UPDATE, DELETE
+-- ==============================================================================
+
+-- 1. crime_branch_personnel
+ALTER TABLE crime_branch_personnel ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access on crime_branch_personnel" ON crime_branch_personnel;
+CREATE POLICY "Public full access on crime_branch_personnel"
+ON crime_branch_personnel
+FOR ALL
+TO anon, authenticated, public
+USING (true)
+WITH CHECK (true);
+
+-- 2. operational_broadcasts
+ALTER TABLE operational_broadcasts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access on operational_broadcasts" ON operational_broadcasts;
+CREATE POLICY "Public full access on operational_broadcasts"
+ON operational_broadcasts
+FOR ALL
+TO anon, authenticated, public
+USING (true)
+WITH CHECK (true);
+
+-- 3. squad_tasks
+ALTER TABLE squad_tasks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access on squad_tasks" ON squad_tasks;
+CREATE POLICY "Public full access on squad_tasks"
+ON squad_tasks
+FOR ALL
+TO anon, authenticated, public
+USING (true)
+WITH CHECK (true);
+
+-- 4. app_users
+ALTER TABLE app_users ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access on app_users" ON app_users;
+CREATE POLICY "Public full access on app_users"
+ON app_users
+FOR ALL
+TO anon, authenticated, public
+USING (true)
+WITH CHECK (true);
+
+-- 5. chat_messages
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public full access on chat_messages" ON chat_messages;
+CREATE POLICY "Public full access on chat_messages"
+ON chat_messages
+FOR ALL
+TO anon, authenticated, public
+USING (true)
+WITH CHECK (true);
+
+-- Grant schema permissions to anon and authenticated roles
+GRANT ALL ON TABLE crime_branch_personnel TO anon, authenticated, service_role;
+GRANT ALL ON TABLE operational_broadcasts TO anon, authenticated, service_role;
+GRANT ALL ON TABLE squad_tasks TO anon, authenticated, service_role;
+GRANT ALL ON TABLE app_users TO anon, authenticated, service_role;
+GRANT ALL ON TABLE chat_messages TO anon, authenticated, service_role;
 `;

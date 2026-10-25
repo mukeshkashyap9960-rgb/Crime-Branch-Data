@@ -535,17 +535,8 @@ export default function App() {
       try {
         const data = await loadPersonnelFromSupabase();
         if (data && Array.isArray(data) && data.length > 0) {
-          const seen = new Set<string>();
-          const cleanPersonnel: Personnel[] = [];
-          data.forEach((p) => {
-            const badge = (p.badgeNo || "").trim();
-            const name = (p.name || "").trim();
-            const key = badge ? `badge:${badge}` : `name:${name}|mob:${p.mobile || ""}`;
-            if (seen.has(key)) return;
-            seen.add(key);
-            cleanPersonnel.push({ ...p, srNo: cleanPersonnel.length + 1 });
-          });
-          setPersonnel(cleanPersonnel);
+          console.log(`[App.tsx] Setting all ${data.length} personnel into state directly from Supabase`);
+          setPersonnel(data);
         } else if (creds.isConfigured) {
           // If Supabase table is fresh/empty, seed initial personnel into Supabase
           await syncPersonnelToSupabase(initialPersonnel, "Initial Database Population");
@@ -1260,12 +1251,15 @@ export default function App() {
 
           const randomAvatar = PRESET_AVATARS[Math.floor(Math.random() * PRESET_AVATARS.length)];
           const cleanBadge = (rawBadgeNo || "").trim();
-          const stableId = cleanBadge 
-            ? `officer-${cleanBadge.replace(/[^a-zA-Z0-9]/g, "-")}` 
-            : `officer-row-${currentSrNo}`;
+          const hasValidBadge = cleanBadge && cleanBadge !== "-" && cleanBadge !== "0" && cleanBadge !== "NA" && /[a-zA-Z0-9]/.test(cleanBadge);
+          const nameSlug = (rawName || "").trim().slice(0, 30).replace(/[^a-zA-Z0-9\u0A80-\u0AFF]/g, "_");
+          const assignedSrNo = currentSrNo++;
+          const stableId = hasValidBadge 
+            ? `officer-${cleanBadge.replace(/[^a-zA-Z0-9]/g, "-")}-${assignedSrNo}` 
+            : `officer-${assignedSrNo}-${nameSlug || "rec"}`;
           const p: Personnel = {
             id: stableId,
-            srNo: currentSrNo++,
+            srNo: assignedSrNo,
             code: rawCode,
             designation: rawDesignation,
             badgeNo: rawBadgeNo,
