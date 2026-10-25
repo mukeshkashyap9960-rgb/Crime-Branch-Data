@@ -533,7 +533,7 @@ export async function fetchUsers(): Promise<AppUserRecord[]> {
   if (client) {
     try {
       const { data, error } = await client.from("app_users").select("*").order("last_active", { ascending: false });
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         return data.map((u: any) => ({
           id: u.id,
           name: u.name,
@@ -550,13 +550,16 @@ export async function fetchUsers(): Promise<AppUserRecord[]> {
     }
   }
 
-  try {
-    const res = await fetch("/api/users");
-    if (res.ok) {
-      const json = await res.json();
-      return json.users || [];
-    }
-  } catch (e) {}
+  // Fallback for local Express dev server if client is not configured
+  if (!client) {
+    try {
+      const res = await fetch("/api/users");
+      if (res.ok) {
+        const json = await res.json();
+        return json.users || [];
+      }
+    } catch (e) {}
+  }
   return [];
 }
 
@@ -564,7 +567,7 @@ export async function recordUserSession(user: AppUserRecord): Promise<void> {
   const client = getSupabase();
   if (client) {
     try {
-      await client.from("app_users").upsert(
+      const { error } = await client.from("app_users").upsert(
         {
           id: user.id,
           name: user.name,
@@ -577,16 +580,14 @@ export async function recordUserSession(user: AppUserRecord): Promise<void> {
         },
         { onConflict: "id" }
       );
-    } catch (e) {}
+      if (error) {
+        console.warn("Supabase recordUserSession error:", error.message);
+      }
+    } catch (e: any) {
+      console.warn("Supabase recordUserSession exception:", e?.message);
+    }
   }
-
-  try {
-    await fetch("/api/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(user)
-    });
-  } catch (e) {}
+  // Removed fallback fetch("/api/users") to prevent 404 errors on Vercel static hosting
 }
 
 export async function updateUserRoleInSupabase(

@@ -440,6 +440,7 @@ export default function App() {
   const [soundAlertEnabled, setSoundAlertEnabled] = useState(true);
   const [isAlertDismissed, setIsAlertDismissed] = useState(false);
   const playedAlertIds = useRef<Set<string>>(new Set());
+  const isSubmittingLoginRef = useRef(false);
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastMsgGu, setBroadcastMsgGu] = useState("");
   const [broadcastMsgEn, setBroadcastMsgEn] = useState("");
@@ -684,6 +685,9 @@ export default function App() {
   // ---------------------------------------------------------------------------
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmittingLoginRef.current) return;
+    isSubmittingLoginRef.current = true;
+    setTimeout(() => { isSubmittingLoginRef.current = false; }, 800);
     setLoginError("");
 
     if (loginMode === "admin") {
@@ -766,6 +770,10 @@ export default function App() {
   };
 
   const handleQuickLoginAsRole = (role: UserRole) => {
+    if (isSubmittingLoginRef.current) return;
+    isSubmittingLoginRef.current = true;
+    setTimeout(() => { isSubmittingLoginRef.current = false; }, 800);
+
     const roleProfiles: Record<UserRole, { id: string; name: string; badge: string; mobile: string }> = {
       super_admin: { id: "user-super-admin-01", name: "Super Admin (HQ)", badge: "ADMIN-01", mobile: "9274583654" },
       admin: { id: "user-admin-02", name: "Inspector V.K. Parmar", badge: "PI-402", mobile: "9825000101" },
