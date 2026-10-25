@@ -564,16 +564,19 @@ export async function recordUserSession(user: AppUserRecord): Promise<void> {
   const client = getSupabase();
   if (client) {
     try {
-      await client.from("app_users").upsert({
-        id: user.id,
-        name: user.name,
-        badge_no: user.badgeNo,
-        mobile: user.mobile,
-        role: user.role,
-        last_active: user.lastActive,
-        login_time: user.loginTime,
-        device: user.device
-      });
+      await client.from("app_users").upsert(
+        {
+          id: user.id,
+          name: user.name,
+          badge_no: user.badgeNo,
+          mobile: user.mobile,
+          role: user.role,
+          last_active: user.lastActive,
+          login_time: user.loginTime,
+          device: user.device
+        },
+        { onConflict: "id" }
+      );
     } catch (e) {}
   }
 

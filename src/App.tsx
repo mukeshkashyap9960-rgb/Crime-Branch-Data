@@ -692,14 +692,14 @@ export default function App() {
 
       if (cleanMobile === "9274583654" && cleanPass === "1673583") {
         const session: UserSession = {
-          id: "super-admin-01",
+          id: "user-super-admin-01",
           role: "super_admin",
           name: "Super Admin (Crime Branch HQ)",
           badgeNo: "ADMIN-01",
           mobile: cleanMobile
         };
         setCurrentUser(session);
-        recordUserSession({
+        const userRecord: AppUserRecord = {
           id: session.id!,
           name: session.name,
           badgeNo: session.badgeNo,
@@ -708,6 +708,14 @@ export default function App() {
           lastActive: new Date().toISOString(),
           loginTime: new Date().toISOString(),
           device: navigator.userAgent.slice(0, 40)
+        };
+        recordUserSession(userRecord);
+        setAppUsers((prev) => {
+          const exists = prev.some((u) => u.id === userRecord.id);
+          if (exists) {
+            return prev.map((u) => (u.id === userRecord.id ? { ...u, ...userRecord } : u));
+          }
+          return [userRecord, ...prev];
         });
         showToast(language === "gu" ? "✓ સુપર એડમિન સફળતાપૂર્વક લોગિન થયા." : "✓ Logged in as Super Admin.", "success");
         return;
@@ -729,14 +737,14 @@ export default function App() {
     const assignedRole: UserRole = existingUser ? existingUser.role : "officer";
 
     const session: UserSession = {
-      id: `officer-${badge}`,
+      id: `user-officer-${badge}`,
       role: assignedRole,
       name: matched ? matched.name : `Officer #${badge}`,
       badgeNo: badge,
       mobile: mob
     };
     setCurrentUser(session);
-    recordUserSession({
+    const userRecord: AppUserRecord = {
       id: session.id!,
       name: session.name,
       badgeNo: session.badgeNo,
@@ -745,36 +753,52 @@ export default function App() {
       lastActive: new Date().toISOString(),
       loginTime: new Date().toISOString(),
       device: navigator.userAgent.slice(0, 40)
+    };
+    recordUserSession(userRecord);
+    setAppUsers((prev) => {
+      const exists = prev.some((u) => u.id === userRecord.id);
+      if (exists) {
+        return prev.map((u) => (u.id === userRecord.id ? { ...u, ...userRecord } : u));
+      }
+      return [userRecord, ...prev];
     });
     showToast(language === "gu" ? `✓ સ્વાગત છે, ${session.name}` : `✓ Welcome, ${session.name}`, "success");
   };
 
   const handleQuickLoginAsRole = (role: UserRole) => {
-    const roleNames: Record<UserRole, { name: string; badge: string; mobile: string }> = {
-      super_admin: { name: "Super Admin (HQ)", badge: "ADMIN-01", mobile: "9274583654" },
-      admin: { name: "Inspector V.K. Parmar", badge: "PI-402", mobile: "9825000101" },
-      squad: { name: "PSI H.D. Patel (Squad 01 Leader)", badge: "PSI-804", mobile: "9426000202" },
-      officer: { name: "Rameshchandra S. Solanki", badge: "770", mobile: "9824000303" },
-      viewer: { name: "Control Room Monitor", badge: "VIEW-01", mobile: "9876543210" }
+    const roleProfiles: Record<UserRole, { id: string; name: string; badge: string; mobile: string }> = {
+      super_admin: { id: "user-super-admin-01", name: "Super Admin (HQ)", badge: "ADMIN-01", mobile: "9274583654" },
+      admin: { id: "user-admin-02", name: "Inspector V.K. Parmar", badge: "PI-402", mobile: "9825000101" },
+      squad: { id: "user-squad-03", name: "PSI H.D. Patel (Squad 01 Leader)", badge: "PSI-804", mobile: "9426000202" },
+      officer: { id: "user-officer-04", name: "Rameshchandra S. Solanki", badge: "770", mobile: "9824000303" },
+      viewer: { id: "user-viewer-05", name: "Control Room Monitor", badge: "VIEW-01", mobile: "9876543210" }
     };
-    const sel = roleNames[role];
+    const sel = roleProfiles[role];
     const session: UserSession = {
-      id: `user-${role}-${Date.now().toString(36)}`,
+      id: sel.id,
       role,
       name: sel.name,
       badgeNo: sel.badge,
       mobile: sel.mobile
     };
     setCurrentUser(session);
-    recordUserSession({
-      id: session.id!,
-      name: session.name,
-      badgeNo: session.badgeNo,
-      mobile: session.mobile,
+    const userRecord: AppUserRecord = {
+      id: sel.id,
+      name: sel.name,
+      badgeNo: sel.badge,
+      mobile: sel.mobile,
       role,
       lastActive: new Date().toISOString(),
       loginTime: new Date().toISOString(),
       device: navigator.userAgent.slice(0, 40)
+    };
+    recordUserSession(userRecord);
+    setAppUsers((prev) => {
+      const exists = prev.some((u) => u.id === userRecord.id);
+      if (exists) {
+        return prev.map((u) => (u.id === userRecord.id ? { ...u, ...userRecord } : u));
+      }
+      return [userRecord, ...prev];
     });
     showToast(`Logged in as ${role.toUpperCase()}`, "info");
   };
