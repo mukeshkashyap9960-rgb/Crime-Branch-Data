@@ -514,9 +514,15 @@ export default function App() {
   // Sync strictly to Supabase and Central DB (NO localStorage or sessionStorage)
   const syncToDatabase = async (updatedList: Personnel[], reason: string) => {
     try {
-      await syncPersonnelToSupabase(updatedList, currentUser?.name || "Super Admin");
-    } catch (e) {
+      const res = await syncPersonnelToSupabase(updatedList, currentUser?.name || "Super Admin");
+      if (res.success) {
+        showToast(language === "gu" ? `✓ ${res.count} અધિકારીઓ ડેટાબેઝમાં સેવ થયા.` : `✓ ${res.count} records synced to database.`, "success");
+      } else {
+        showToast("Database sync failed: " + (res.error || "Unknown Error"), "error");
+      }
+    } catch (e: any) {
       console.warn("Supabase database sync error:", e);
+      showToast("Sync Error: " + e.message, "error");
     }
   };
 
@@ -534,16 +540,16 @@ export default function App() {
       // 2. Load Personnel from Supabase tables (names, duty places, photos, appointments, dates)
       try {
         const data = await loadPersonnelFromSupabase();
-        if (data && Array.isArray(data) && data.length > 0) {
-          console.log(`[App.tsx] Setting all ${data.length} personnel into state directly from Supabase`);
-          setPersonnel(data);
-        } else if (creds.isConfigured) {
-          // If Supabase table is fresh/empty, seed initial personnel into Supabase
-          await syncPersonnelToSupabase(initialPersonnel, "Initial Database Population");
+        if (data && Array.isArray(data)) {
+          console.log(`[App.tsx] Loaded ${data.length} records from Supabase.`);
+          setPersonnel(data.length > 0 ? data : initialPersonnel);
+        } else {
+          // If load failed or returned null, show placeholders but do NOT sync them back
           setPersonnel(initialPersonnel);
         }
       } catch (err) {
         console.warn("Personnel load error:", err);
+        setPersonnel(initialPersonnel);
       } finally {
         setIsLoadingData(false);
       }

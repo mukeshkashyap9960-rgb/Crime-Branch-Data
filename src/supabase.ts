@@ -469,11 +469,14 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
           });
         });
 
-        console.log(`[Supabase] Successfully mapped ${list.length} total personnel records (all 409 preserved).`);
+        console.log(`[Supabase] Successfully mapped ${list.length} total personnel records.`);
         return list;
+      } else {
+        return [];
       }
     } catch (e) {
       console.warn("[Supabase] Failed to load from table crime_branch_personnel:", e);
+      return [];
     }
   }
 
