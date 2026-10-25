@@ -445,6 +445,11 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
             ? r.sr_no
             : idx + 1;
 
+          let rawAppt = r.appointment || "";
+          if (rawAppt.includes("એટેચ") || rawAppt.toLowerCase().includes("attach") || rawAppt.toLowerCase() === "attech") {
+            rawAppt = "ATTECH";
+          }
+
           list.push({
             id: rowId,
             srNo: sr,
@@ -454,7 +459,7 @@ export async function loadPersonnelFromSupabase(): Promise<Personnel[] | null> {
             name: r.name || "",
             mobile: r.mobile || "",
             dutyPlace: r.duty_place || "",
-            appointment: r.appointment || "",
+            appointment: rawAppt,
             reportDate: r.report_date || "",
             birthDate: r.birth_date || "",
             recruitedDate: r.recruited_date || "",

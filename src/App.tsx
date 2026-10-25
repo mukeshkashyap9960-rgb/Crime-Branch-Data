@@ -1241,6 +1241,10 @@ export default function App() {
             parsedAppointment = temp;
           }
 
+          if (parsedAppointment.includes("એટેચ") || parsedAppointment.toLowerCase().includes("attach") || parsedAppointment.toLowerCase() === "attech") {
+            parsedAppointment = "ATTECH";
+          }
+
           const rawReportDate = cols[offset + 7] || "01/01/2026";
           const rawBirthDate = cols[offset + 8] || "01/06/1980";
           const rawRecruitedDate = cols[offset + 9] || "01/01/2005";
@@ -1995,13 +1999,16 @@ export default function App() {
           </motion.div>
 
           <motion.div whileHover={{ y: -2 }} className="p-3 min-[360px]:p-4 bg-slate-900/80 border border-slate-800 rounded-2xl shadow">
-            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">નીમણૂંક (CRIME / એટેચ)</span>
+            <span className="text-[10px] min-[360px]:text-xs text-slate-400 block font-medium">નીમણૂંક (CRIME / ATTECH)</span>
             <div className="flex items-baseline gap-2 mt-1">
               <span className="text-lg min-[360px]:text-xl font-black text-emerald-400 font-mono">
                 {personnel.filter((p) => (p.appointment || "").toLowerCase() === "crime").length}
               </span>
               <span className="text-[10px] text-purple-400 font-mono">
-                / {personnel.filter((p) => (p.appointment || "").includes("એટેચ")).length} એટેચ
+                / {personnel.filter((p) => {
+                    const app = (p.appointment || "").toLowerCase();
+                    return app === "attech" || app.includes("એટેચ") || app.includes("attach");
+                  }).length} ATTECH
               </span>
             </div>
           </motion.div>
