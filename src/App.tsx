@@ -363,7 +363,7 @@ export default function App() {
     aadharNo: false,
     panNo: false,
     bloodGroup: false,
-    weaponNo: false,
+    weaponNo: true,
     tenure: true
   });
 
@@ -1476,6 +1476,7 @@ export default function App() {
         p.appointment.toLowerCase().includes(q) ||
         p.aadharNo.toLowerCase().includes(q) ||
         p.panNo.toLowerCase().includes(q) ||
+        (p.weaponNo || "").toLowerCase().includes(q) ||
         p.bloodGroup.toLowerCase().includes(q) ||
         Object.values(p.customFields || {}).some((v) => v.toLowerCase().includes(q));
 
@@ -2331,6 +2332,13 @@ export default function App() {
                       </div>
                     </th>
 
+                    <th onClick={() => handleSort("weaponNo")} className="p-3 cursor-pointer hover:text-white transition">
+                      <div className="flex items-center gap-1 text-amber-400/90 hover:text-amber-300">
+                        <span>HRPN No.</span>
+                        {sortColumn === "weaponNo" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
+                      </div>
+                    </th>
+
                     <th onClick={() => handleSort("name")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.name}</span>
@@ -2405,6 +2413,7 @@ export default function App() {
                           </span>
                         </td>
                         <td className="p-3 font-mono font-bold text-slate-300">{cleanBadge(p.badgeNo)}</td>
+                        <td className="p-3 font-mono font-semibold text-amber-400">{maskWeapon(p.weaponNo)}</td>
                         <td className="p-3 font-bold text-white max-w-[200px] truncate">{p.name}</td>
                         <td className="p-3 font-mono text-slate-300">{maskMobile(p.mobile)}</td>
 
@@ -4251,7 +4260,11 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-slate-400 font-semibold">{t.weapon}</label>
+                    <input type="text" value={formData.weaponNo} onChange={(e) => setFormData({ ...formData, weaponNo: e.target.value })} placeholder="HRPN No." className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono" />
+                  </div>
                   <div className="space-y-1">
                     <label className="text-slate-400 font-semibold">{t.blood}</label>
                     <input type="text" value={formData.bloodGroup} onChange={(e) => setFormData({ ...formData, bloodGroup: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" />
