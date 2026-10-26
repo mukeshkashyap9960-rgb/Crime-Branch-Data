@@ -2332,13 +2332,6 @@ export default function App() {
                       </div>
                     </th>
 
-                    <th onClick={() => handleSort("weaponNo")} className="p-3 cursor-pointer hover:text-white transition">
-                      <div className="flex items-center gap-1 text-amber-400/90 hover:text-amber-300">
-                        <span>HRPN No.</span>
-                        {sortColumn === "weaponNo" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
-                      </div>
-                    </th>
-
                     <th onClick={() => handleSort("name")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.name}</span>
@@ -2373,6 +2366,13 @@ export default function App() {
                     <th onClick={() => handleSort("retirementDate")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
                         <span>{t.retirementDate}</span>
+                      </div>
+                    </th>
+
+                    <th onClick={() => handleSort("weaponNo")} className="p-3 cursor-pointer hover:text-white transition">
+                      <div className="flex items-center gap-1 text-amber-400/90 hover:text-amber-300">
+                        <span>HRPN No.</span>
+                        {sortColumn === "weaponNo" && (sortDirection === "asc" ? <ArrowUp className="w-3 h-3 text-amber-400" /> : <ArrowDown className="w-3 h-3 text-amber-400" />)}
                       </div>
                     </th>
 
@@ -2413,7 +2413,6 @@ export default function App() {
                           </span>
                         </td>
                         <td className="p-3 font-mono font-bold text-slate-300">{cleanBadge(p.badgeNo)}</td>
-                        <td className="p-3 font-mono font-semibold text-amber-400">{maskWeapon(p.weaponNo)}</td>
                         <td className="p-3 font-bold text-white max-w-[200px] truncate">{p.name}</td>
                         <td className="p-3 font-mono text-slate-300">{maskMobile(p.mobile)}</td>
 
@@ -2431,6 +2430,7 @@ export default function App() {
 
                         <td className="p-3 font-mono text-slate-400">{p.reportDate || "-"}</td>
                         <td className="p-3 font-mono font-semibold text-amber-400">{p.retirementDate || "-"}</td>
+                        <td className="p-3 font-mono font-semibold text-amber-400">{maskWeapon(p.weaponNo)}</td>
 
                         {/* Calculated Tenure */}
                         <td className="p-3 font-mono text-emerald-400 font-bold text-[11px]">
