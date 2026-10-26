@@ -10,7 +10,7 @@ import {
   HeartPulse, Clock, SlidersHorizontal, Settings2, Save, FileDown,
   UploadCloud, ExternalLink, HardDrive, ShieldCheck, Zap,
   Megaphone, Radio, ListTodo, CheckCircle2, Clock3, UserCheck,
-  Volume2, VolumeX, Share2, Send, UserCog
+  Volume2, VolumeX, Share2, Send, UserCog, Camera
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -1056,6 +1056,33 @@ export default function App() {
     setPersonnel(updated);
     syncToDatabase(updated, "1-Click Column Swap: Duty Place ⇄ Appointment");
     showToast(language === "gu" ? "✓ ફરજની જગ્યા અને નીમણુંક સફળતાપૂર્વક સ્વેપ થઈ ગઈ!" : "✓ Successfully swapped Duty Place and Appointment across all records!", "success");
+  };
+
+  const handlePhotoUpload = async (personId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      showToast("Please select a valid image file", "error");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async (uploadEvent) => {
+      const base64Url = uploadEvent.target?.result as string;
+      if (!base64Url) return;
+
+      const updated = personnel.map((p) => (p.id === personId ? { ...p, avatarUrl: base64Url } : p));
+      setPersonnel(updated);
+
+      if (selectedOfficer && selectedOfficer.id === personId) {
+        setSelectedOfficer({ ...selectedOfficer, avatarUrl: base64Url });
+      }
+
+      await syncToDatabase(updated, `Updated photo for officer ID ${personId}`);
+      showToast(language === "gu" ? "✓ ફોટો સફળતાપૂર્વક અપલોડ થયો!" : "✓ Photo uploaded successfully!", "success");
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleResequenceSrNos = () => {
@@ -2439,12 +2466,23 @@ export default function App() {
                   <div>
                     <div className="flex items-start justify-between gap-2.5">
                       <div className="flex items-center gap-3">
-                        <img
-                          src={p.avatarUrl || PRESET_AVATARS[0]}
-                          alt={p.name}
-                          className="w-10 h-10 min-[360px]:w-12 min-[360px]:h-12 rounded-full object-cover border-2 border-amber-500/50 shadow"
-                          loading="lazy"
-                        />
+                        <div className="relative group">
+                          <img
+                            src={p.avatarUrl || PRESET_AVATARS[0]}
+                            alt={p.name}
+                            className="w-10 h-10 min-[360px]:w-12 min-[360px]:h-12 rounded-full object-cover border-2 border-amber-500/50 shadow"
+                            loading="lazy"
+                          />
+                          <label onClick={(e) => e.stopPropagation()} className="absolute -bottom-1 -right-1 p-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg cursor-pointer shadow transition" title="Upload Photo / ફોટો અપલોડ કરો">
+                            <Camera className="w-3 h-3" />
+                            <input
+                              type="file"
+                              accept="image/*"
+                              className="hidden"
+                              onChange={(e) => handlePhotoUpload(p.id, e)}
+                            />
+                          </label>
+                        </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-xs font-bold text-amber-400 font-mono">{p.code}</span>
@@ -3020,11 +3058,22 @@ export default function App() {
                 
                 {/* Officer Avatar & Header */}
                 <div className="flex items-center gap-3.5">
-                  <img
-                    src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
-                    alt={selectedOfficer.name}
-                    className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 shadow"
-                  />
+                  <div className="relative group">
+                    <img
+                      src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
+                      alt={selectedOfficer.name}
+                      className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 shadow"
+                    />
+                    <label className="absolute -bottom-1 -right-1 p-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl cursor-pointer shadow-lg transition" title="Upload Photo / ફોટો અપલોડ કરો">
+                      <Camera className="w-3.5 h-3.5" />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handlePhotoUpload(selectedOfficer.id, e)}
+                      />
+                    </label>
+                  </div>
                   <div>
                     <h2 className="text-base min-[360px]:text-lg font-bold text-white">{selectedOfficer.name}</h2>
                     <p className="text-xs text-amber-400 font-mono">{selectedOfficer.code} • {selectedOfficer.designation}</p>
