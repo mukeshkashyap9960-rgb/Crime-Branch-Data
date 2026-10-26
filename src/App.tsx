@@ -658,39 +658,7 @@ export default function App() {
     }
   };
 
-  // Export JSON Master File
-  const handleExportJSON = () => {
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(personnel, null, 2));
-    const dlAnchor = document.createElement("a");
-    dlAnchor.setAttribute("href", dataStr);
-    dlAnchor.setAttribute("download", `Gujarat_Police_Crime_Branch_Master_${Date.now()}.json`);
-    dlAnchor.click();
-    dlAnchor.remove();
-    showToast("Master JSON exported successfully!", "success");
-  };
-
-  // Export CSV File
-  const handleExportCSV = () => {
-    const headers = [
-      "Sr No", "Code", "Designation", "Badge No", "Name", "Mobile", 
-      "Duty Place", "Appointment", "Report Date", "Birth Date", "Recruited Date", 
-      "Retirement Date", "Aadhaar", "PAN", "Blood Group", "Weapon No"
-    ];
-    const rows = filteredPersonnel.map(p => [
-      p.srNo, p.code, p.designation, p.badgeNo, `"${p.name}"`, p.mobile,
-      `"${p.dutyPlace}"`, `"${p.appointment}"`, p.reportDate, p.birthDate,
-      p.recruitedDate, p.retirementDate, `"${p.aadharNo}"`, p.panNo, p.bloodGroup, p.weaponNo
-    ]);
-    const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
-    const encoded = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encoded);
-    link.setAttribute("download", `Gujarat_Police_Crime_Branch_Roster_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showToast("CSV roster downloaded successfully!", "success");
-  };
+  // Note: handleExportCSV and handleExportJSON are defined below after filteredPersonnel and all masking functions
 
   // ---------------------------------------------------------------------------
   // AUTHENTICATION & LOGIN (RECORDED TO SUPABASE, NO LOCAL STORAGE)
@@ -1549,6 +1517,161 @@ export default function App() {
     return filteredPersonnel.slice(start, start + pageSize);
   }, [filteredPersonnel, currentPage, pageSize]);
 
+  // ---------------------------------------------------------------------------
+  // FILTERED DATA DOWNLOAD (EXCEL / CSV, JSON) & FILTER STATE HELPERS
+  // ---------------------------------------------------------------------------
+  const handleExportCSV = () => {
+    if (filteredPersonnel.length === 0) {
+      showToast(
+        language === "gu"
+          ? "ડાઉનલોડ કરવા માટે કોઈ કર્મચારી મળ્યા નથી!"
+          : "No personnel match current filters to download!",
+        "warning"
+      );
+      return;
+    }
+
+    const headers = [
+      language === "gu" ? "અ.નં." : "Sr No",
+      language === "gu" ? "સ્કોડ" : "Squad",
+      language === "gu" ? "હોદ્દો" : "Designation",
+      language === "gu" ? "બક્કલ નં." : "Badge No",
+      language === "gu" ? "નામ" : "Officer Name",
+      language === "gu" ? "મોબાઇલ નંબર" : "Mobile No",
+      language === "gu" ? "ફરજની જગ્યા" : "Duty Place",
+      language === "gu" ? "નીમણુંક" : "Appointment",
+      language === "gu" ? "ક્રાઇમ હાજર તારીખ" : "Crime Reporting Date",
+      language === "gu" ? "વય નિવૃત તારીખ" : "Retirement Date",
+      "HRPN No.",
+      language === "gu" ? "સેવા સમયગાળો" : "Worked Tenure",
+      language === "gu" ? "જન્મ તારીખ" : "Birth Date",
+      language === "gu" ? "ભરતી તારીખ" : "Recruited Date",
+      language === "gu" ? "આધાર કાર્ડ નંબર" : "Aadhaar Card No",
+      language === "gu" ? "પાન કાર્ડ નંબર" : "PAN Card No",
+      language === "gu" ? "બ્લડ ગ્રુપ" : "Blood Group"
+    ];
+
+    const escapeCsv = (val: any) => {
+      if (val === undefined || val === null) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = filteredPersonnel.map((p, idx) => {
+      const tenure = calculateServiceTenure(p.reportDate || p.appointmentDate || p.recruitedDate);
+      const tenureStr = tenure ? (language === "gu" ? tenure.formattedGu : tenure.formatted) : "-";
+      const bNo = cleanBadge(p.badgeNo);
+      const mob = isPrivileged && !maskSensitiveData ? p.mobile : maskMobile(p.mobile);
+      const aadhar = isPrivileged && !maskSensitiveData ? (p.aadharNo || "-") : maskAadhaar(p.aadharNo);
+      const pan = isPrivileged && !maskSensitiveData ? (p.panNo || "-") : maskPan(p.panNo);
+      const weapon = isPrivileged && !maskSensitiveData ? (p.weaponNo || "-") : maskWeapon(p.weaponNo);
+
+      return [
+        p.srNo || (idx + 1),
+        escapeCsv(p.code),
+        escapeCsv(p.designation),
+        escapeCsv(bNo),
+        escapeCsv(p.name),
+        escapeCsv(mob),
+        escapeCsv(p.dutyPlace),
+        escapeCsv(p.appointment),
+        escapeCsv(p.reportDate || "-"),
+        escapeCsv(p.retirementDate || "-"),
+        escapeCsv(weapon),
+        escapeCsv(tenureStr),
+        escapeCsv(p.birthDate || "-"),
+        escapeCsv(p.recruitedDate || "-"),
+        escapeCsv(aadhar),
+        escapeCsv(pan),
+        escapeCsv(p.bloodGroup || "-")
+      ].join(",");
+    });
+
+    // Descriptive tag for downloaded file based on active filters
+    let filterTag = "Filtered";
+    if (selectedSquad !== "ALL") {
+      filterTag = selectedSquad.replace(/[^a-zA-Z0-9\u0A80-\u0AFF]/g, "_");
+    } else if (selectedAppointment !== "ALL") {
+      filterTag = `Appt_${selectedAppointment}`;
+    } else if (selectedDesignation !== "ALL") {
+      filterTag = `Desig_${selectedDesignation}`;
+    } else if (searchQuery.trim()) {
+      filterTag = `Search_${searchQuery.trim().slice(0, 15).replace(/[^a-zA-Z0-9\u0A80-\u0AFF]/g, "_")}`;
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = `Gujarat_Police_Crime_Branch_${filterTag}_${filteredPersonnel.length}_Staff_${dateStr}.csv`;
+
+    const csvContent = "\uFEFF" + headers.map((h) => `"${h}"`).join(",") + "\n" + rows.join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    showToast(
+      language === "gu"
+        ? `✓ ફિલ્ટર થયેલ ${filteredPersonnel.length} કર્મચારીઓની વિગત (Excel/CSV) ડાઉનલોડ થઈ ગઈ!`
+        : `✓ Downloaded ${filteredPersonnel.length} filtered records as Excel/CSV!`,
+      "success"
+    );
+  };
+
+  const handleExportJSON = () => {
+    if (filteredPersonnel.length === 0) {
+      showToast(
+        language === "gu"
+          ? "ડાઉનલોડ કરવા માટે કોઈ કર્મચારી મળ્યા નથી!"
+          : "No personnel match current filters to download!",
+        "warning"
+      );
+      return;
+    }
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = `Gujarat_Police_Crime_Branch_Filtered_${filteredPersonnel.length}_Staff_${dateStr}.json`;
+    const blob = new Blob([JSON.stringify(filteredPersonnel, null, 2)], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const dlAnchor = document.createElement("a");
+    dlAnchor.href = url;
+    dlAnchor.download = fileName;
+    document.body.appendChild(dlAnchor);
+    dlAnchor.click();
+    document.body.removeChild(dlAnchor);
+    URL.revokeObjectURL(url);
+    showToast(
+      language === "gu"
+        ? `✓ ફિલ્ટર થયેલ ${filteredPersonnel.length} રેકોર્ડ્સ (JSON) સફળતાપૂર્વક ડાઉનલોડ થયા!`
+        : `✓ Downloaded ${filteredPersonnel.length} filtered records as JSON!`,
+      "success"
+    );
+  };
+
+  const handleResetFilters = () => {
+    setSearchQuery("");
+    setSelectedSquad("ALL");
+    setSelectedDesignation("ALL");
+    setSelectedAppointment("ALL");
+    setSelectedTenureFilter("ALL");
+    setSelectedRetirementAlert("ALL");
+    setSelectedBloodGroup("ALL");
+    setCurrentPage(1);
+    showToast(language === "gu" ? "બધા ફિલ્ટર રીસેટ કર્યા" : "All filters reset", "info");
+  };
+
+  const isAnyFilterActive = Boolean(
+    searchQuery.trim() ||
+    selectedSquad !== "ALL" ||
+    selectedDesignation !== "ALL" ||
+    selectedAppointment !== "ALL" ||
+    selectedTenureFilter !== "ALL" ||
+    selectedRetirementAlert !== "ALL" ||
+    selectedBloodGroup !== "ALL"
+  );
+
   // Translations dictionary for bilingual support
   const t = {
     title: language === "gu" ? "ક્રાઇમ બ્રાન્ચ સ્ટાફ અને સ્કોડ મેનેજમેન્ટ" : "Crime Branch Squad & Personnel System",
@@ -2175,53 +2298,67 @@ export default function App() {
               )}
             </div>
 
-            {/* Quick 1-Click Column Swap & Add Officer */}
-            {isPrivileged && (
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={handleSwapDutyPlaceAndAppointment}
-                  className="px-2.5 py-2 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
-                  title="Swap Duty Place and Appointment columns across all records"
-                >
-                  <ArrowLeftRight className="w-3.5 h-3.5" />
-                  <span className="hidden min-[500px]:inline">Swap Duty ⇄ Appt</span>
-                </button>
+            {/* Action Buttons: Download Filtered, Swap Columns, Add Officer */}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleExportCSV}
+                className="px-3 py-2 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow"
+                title={language === "gu" ? `ફિલ્ટર થયેલ ${filteredPersonnel.length} કર્મચારીઓ ડાઉનલોડ કરો` : `Download ${filteredPersonnel.length} filtered personnel`}
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{language === "gu" ? "ડાઉનલોડ" : "Download"}</span>
+                <span className="px-1.5 py-0.2 bg-emerald-950/80 rounded font-mono text-[11px] text-emerald-300">
+                  {filteredPersonnel.length}
+                </span>
+              </button>
 
-                <button
-                  onClick={() => {
-                    setEditingPerson(null);
-                    setFormData({
-                      id: "",
-                      srNo: personnel.length + 1,
-                      code: "સ્કોડ-૦૧",
-                      designation: "UASI",
-                      badgeNo: "",
-                      name: "",
-                      mobile: "",
-                      dutyPlace: "સ્કોડ-૦૧",
-                      appointment: "CRIME",
-                      reportDate: "01/01/2026",
-                      birthDate: "01/06/1985",
-                      recruitedDate: "01/01/2005",
-                      retirementDate: "30/06/2043",
-                      aadharNo: "",
-                      panNo: "",
-                      bloodGroup: "B+",
-                      weaponNo: "",
-                      avatarUrl: PRESET_AVATARS[0],
-                      appointmentDate: "01/01/2026",
-                      notes: "",
-                      customFields: {}
-                    });
-                    setIsModalOpen(true);
-                  }}
-                  className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow transition flex items-center gap-1"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>{language === "gu" ? "નવો સ્ટાફ" : "Add Officer"}</span>
-                </button>
-              </div>
-            )}
+              {isPrivileged && (
+                <>
+                  <button
+                    onClick={handleSwapDutyPlaceAndAppointment}
+                    className="px-2.5 py-2 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-300 hover:text-white border border-cyan-500/30 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                    title="Swap Duty Place and Appointment columns across all records"
+                  >
+                    <ArrowLeftRight className="w-3.5 h-3.5" />
+                    <span className="hidden min-[500px]:inline">Swap Duty ⇄ Appt</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setEditingPerson(null);
+                      setFormData({
+                        id: "",
+                        srNo: personnel.length + 1,
+                        code: "સ્કોડ-૦૧",
+                        designation: "UASI",
+                        badgeNo: "",
+                        name: "",
+                        mobile: "",
+                        dutyPlace: "સ્કોડ-૦૧",
+                        appointment: "CRIME",
+                        reportDate: "01/01/2026",
+                        birthDate: "01/06/1985",
+                        recruitedDate: "01/01/2005",
+                        retirementDate: "30/06/2043",
+                        aadharNo: "",
+                        panNo: "",
+                        bloodGroup: "B+",
+                        weaponNo: "",
+                        avatarUrl: PRESET_AVATARS[0],
+                        appointmentDate: "01/01/2026",
+                        notes: "",
+                        customFields: {}
+                      });
+                      setIsModalOpen(true);
+                    }}
+                    className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow transition flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{language === "gu" ? "નવો સ્ટાફ" : "Add Officer"}</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* FILTERS ROW (SQUAD, DESIGNATION, APPOINTMENT, WORKED TENURE 1-6+ YRS, RETIREMENT) */}
@@ -2289,6 +2426,68 @@ export default function App() {
               <option value="1YR">Retiring in 1 Year</option>
               <option value="RETIRED">Already Retired</option>
             </select>
+          </div>
+
+          {/* FILTER STATUS, LIVE RESULT COUNTER & DOWNLOAD OPTIONS BAR */}
+          <div className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+            {/* Left: Filter result summary & active filter indicator */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1 rounded-lg border border-slate-800">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="text-slate-400 font-medium">{language === "gu" ? "પરિણામ:" : "Results:"}</span>
+                <span className="font-bold text-amber-400 font-mono text-sm">{filteredPersonnel.length}</span>
+                <span className="text-slate-500 text-[11px]">/ {personnel.length} {language === "gu" ? "સ્ટાફ" : "staff"}</span>
+              </div>
+
+              {isAnyFilterActive && (
+                <div className="flex items-center gap-1.5">
+                  <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[11px] font-semibold border border-amber-500/30">
+                    {language === "gu" ? "ફિલ્ટર લાગુ છે" : "Filter Active"}
+                  </span>
+                  <button
+                    onClick={handleResetFilters}
+                    className="px-2 py-0.5 rounded-md bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 text-[11px] font-medium transition flex items-center gap-1"
+                    title={language === "gu" ? "બધા ફિલ્ટર હટાવો" : "Clear all filters"}
+                  >
+                    <X className="w-3 h-3 text-rose-400" />
+                    <span>{language === "gu" ? "રીસેટ (Clear)" : "Reset"}</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Right: Download options (Excel/CSV, JSON, Print/PDF) */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={handleExportCSV}
+                className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold rounded-xl text-xs shadow-md hover:shadow-emerald-500/20 transition flex items-center gap-1.5 active:scale-95"
+                title={language === "gu" ? `ફિલ્ટર થયેલ ${filteredPersonnel.length} કર્મચારીઓની Excel/CSV ફાઇલ ડાઉનલોડ કરો` : "Download filtered roster in Excel/CSV"}
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>{language === "gu" ? "ડાઉનલોડ (Excel/CSV)" : "Download (CSV)"}</span>
+                <span className="px-1.5 py-0.2 bg-emerald-950/70 rounded-md font-mono text-[11px] text-emerald-200">
+                  {filteredPersonnel.length}
+                </span>
+              </button>
+
+              <button
+                onClick={handleExportJSON}
+                className="px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-semibold transition flex items-center gap-1"
+                title={language === "gu" ? "ફિલ્ટર કરેલ JSON ડેટા ડાઉનલોડ કરો" : "Download filtered JSON"}
+              >
+                <FileDown className="w-3.5 h-3.5 text-amber-400" />
+                <span>JSON</span>
+              </button>
+
+              <button
+                onClick={() => window.print()}
+                className="px-2.5 py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-semibold transition flex items-center gap-1"
+                title={language === "gu" ? "પ્રિન્ટ અથવા PDF તરીકે સાચવો" : "Print or save as PDF"}
+              >
+                <Printer className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{language === "gu" ? "પ્રિન્ટ / PDF" : "Print"}</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2501,9 +2700,21 @@ export default function App() {
 
             {/* Pagination Controls */}
             <div className="p-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <span className="text-slate-400 font-medium">
-                Showing {paginatedPersonnel.length} of {filteredPersonnel.length} personnel (Page {currentPage} of {totalPages})
-              </span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-slate-400 font-medium">
+                  {language === "gu"
+                    ? `${filteredPersonnel.length} માંથી ${paginatedPersonnel.length} કર્મચારીઓ (પેજ ${currentPage} / ${totalPages})`
+                    : `Showing ${paginatedPersonnel.length} of ${filteredPersonnel.length} personnel (Page ${currentPage} of ${totalPages})`}
+                </span>
+                <button
+                  onClick={handleExportCSV}
+                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 hover:underline transition"
+                  title={language === "gu" ? "ફિલ્ટર કરેલ તમામ કર્મચારીઓ CSV/Excel માં ડાઉનલોડ કરો" : "Download all filtered records"}
+                >
+                  <Download className="w-3 h-3" />
+                  <span>{language === "gu" ? "આ લિસ્ટ ડાઉનલોડ કરો" : "Download filtered list"}</span>
+                </button>
+              </div>
               <div className="flex items-center gap-1.5">
                 <button
                   disabled={currentPage <= 1}
