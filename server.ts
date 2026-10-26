@@ -24,7 +24,21 @@ const BROADCASTS_FILE = path.join(DATA_DIR, "broadcasts.json");
 const SQUAD_TASKS_FILE = path.join(DATA_DIR, "squad-tasks.json");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const CHAT_FILE = path.join(DATA_DIR, "chat-messages.json");
+const SQUADS_FILE = path.join(DATA_DIR, "squads.json");
 const SUPABASE_CONFIG_FILE = path.join(DATA_DIR, "supabase-config.json");
+
+const DEFAULT_SQUADS = [
+  "સ્કોડ-૦૧",
+  "સ્કોડ-૦૨",
+  "સ્કોડ-૦૩",
+  "સ્કોડ-૦૪",
+  "સ્કોડ-૦૫",
+  "સ્કોડ-૦૬",
+  "સ્કોડ-૦૭",
+  "સ્કોડ-૦૮",
+  "સ્કોડ-૦૯",
+  "સ્કોડ-૧૦"
+];
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
@@ -187,6 +201,39 @@ app.delete("/api/squad-tasks/:id", (req, res) => {
       fs.writeFileSync(SQUAD_TASKS_FILE, JSON.stringify(tasks, null, 2));
     }
     res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4. Squads List API (Managed Squads: Default 10 Squads: Squad-01 to Squad-10)
+// ---------------------------------------------------------------------------
+app.get("/api/squads", (_req, res) => {
+  try {
+    if (fs.existsSync(SQUADS_FILE)) {
+      const data = fs.readFileSync(SQUADS_FILE, "utf-8");
+      const parsed = JSON.parse(data);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return res.json({ squads: parsed });
+      }
+    }
+    return res.json({ squads: DEFAULT_SQUADS });
+  } catch (e) {
+    res.json({ squads: DEFAULT_SQUADS });
+  }
+});
+
+app.post("/api/squads", (req, res) => {
+  try {
+    const { squads, user = "Super Admin" } = req.body;
+    if (!Array.isArray(squads)) {
+      return res.status(400).json({ error: "squads must be an array of strings" });
+    }
+    const cleanSquads = Array.from(new Set(squads.map((s: any) => String(s).trim()).filter(Boolean)));
+    fs.writeFileSync(SQUADS_FILE, JSON.stringify(cleanSquads, null, 2));
+    writeAuditLog("SQUAD_LIST_UPDATE", user, `Updated squad list: ${cleanSquads.length} squads configured.`);
+    res.json({ success: true, squads: cleanSquads });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

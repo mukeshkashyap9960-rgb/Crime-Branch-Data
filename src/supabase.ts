@@ -593,6 +593,77 @@ export async function deleteSquadTask(taskId: string): Promise<{ success: boolea
 }
 
 // ---------------------------------------------------------------------------
+// 3.1 MANAGED SQUADS LIST (DEFAULT: સ્કોડ-૦૧ થી સ્કોડ-૧૦, TOTAL 10 SQUADS)
+// ---------------------------------------------------------------------------
+export const DEFAULT_SQUADS = [
+  "સ્કોડ-૦૧",
+  "સ્કોડ-૦૨",
+  "સ્કોડ-૦૩",
+  "સ્કોડ-૦૪",
+  "સ્કોડ-૦૫",
+  "સ્કોડ-૦૬",
+  "સ્કોડ-૦૭",
+  "સ્કોડ-૦૮",
+  "સ્કોડ-૦૯",
+  "સ્કોડ-૧૦"
+];
+
+export async function fetchSquadsList(): Promise<string[]> {
+  const client = getSupabase();
+  if (client) {
+    try {
+      const { data, error } = await client
+        .from("squad_roster_metadata")
+        .select("squads")
+        .eq("id", "crime_branch_squads")
+        .single();
+      if (!error && data?.squads && Array.isArray(data.squads) && data.squads.length > 0) {
+        return data.squads;
+      }
+    } catch (e) {}
+  }
+  try {
+    const res = await fetch("/api/squads");
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.squads) && data.squads.length > 0) {
+        return data.squads;
+      }
+    }
+  } catch (e) {}
+  return DEFAULT_SQUADS;
+}
+
+export async function saveSquadsList(
+  squads: string[],
+  user: string = "Super Admin"
+): Promise<{ success: boolean; squads: string[] }> {
+  const client = getSupabase();
+  if (client) {
+    try {
+      await client.from("squad_roster_metadata").upsert({
+        id: "crime_branch_squads",
+        squads,
+        updated_at: new Date().toISOString(),
+        updated_by: user
+      });
+    } catch (e) {}
+  }
+  try {
+    const res = await fetch("/api/squads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ squads, user })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, squads: data.squads || squads };
+    }
+  } catch (e) {}
+  return { success: true, squads };
+}
+
+// ---------------------------------------------------------------------------
 // 4. ACTIVE USERS & ROLE MANAGEMENT
 // ---------------------------------------------------------------------------
 export async function fetchUsers(): Promise<AppUserRecord[]> {

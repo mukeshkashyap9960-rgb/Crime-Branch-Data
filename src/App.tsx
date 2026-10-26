@@ -10,7 +10,7 @@ import {
   HeartPulse, Clock, SlidersHorizontal, Settings2, Save, FileDown,
   UploadCloud, ExternalLink, HardDrive, ShieldCheck, Zap,
   Megaphone, Radio, ListTodo, CheckCircle2, Clock3, UserCheck,
-  Volume2, VolumeX, Share2, Send, UserCog, Camera, Link, Upload, Image as ImageIcon
+  Volume2, VolumeX, Share2, Send, UserCog, Camera, Link, Upload, Image as ImageIcon, UserPlus
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -36,7 +36,10 @@ import {
   subscribeToChatMessages,
   configureSupabase,
   getSupabaseConfig,
-  SUPABASE_SQL_SCHEMA
+  SUPABASE_SQL_SCHEMA,
+  DEFAULT_SQUADS,
+  fetchSquadsList,
+  saveSquadsList
 } from "./supabase";
 
 export interface Personnel {
@@ -475,6 +478,11 @@ export default function App() {
   const [officerToReplace, setOfficerToReplace] = useState<Personnel | null>(null);
   const [officerToAssignSearch, setOfficerToAssignSearch] = useState("");
 
+  // Managed Squads (Default 10 Squads: સ્કોડ-૦૧ થી સ્કોડ-૧૦, expandable / reducible)
+  const [squadList, setSquadList] = useState<string[]>(DEFAULT_SQUADS);
+  const [isAddSquadModalOpen, setIsAddSquadModalOpen] = useState(false);
+  const [newSquadNameInput, setNewSquadNameInput] = useState("");
+
   // =========================================================================
   // USER ROLE MANAGEMENT (SUPER ADMIN CAN CHANGE ROLES)
   // =========================================================================
@@ -585,10 +593,15 @@ export default function App() {
         }
       });
 
-      // 5. Load Squad Tasks, App Users, and Chat Messages from Supabase
+      // 5. Load Squad Tasks, App Users, Squads List, and Chat Messages from Supabase
       fetchSquadTasks().then(setSquadTasks);
       fetchUsers().then(setAppUsers);
       fetchChatMessages().then(setChatMessages);
+      fetchSquadsList().then((list) => {
+        if (Array.isArray(list) && list.length > 0) {
+          setSquadList(list);
+        }
+      });
 
       const unsubChat = subscribeToChatMessages((newMsg) => {
         setChatMessages((prev) => {
@@ -974,6 +987,128 @@ export default function App() {
     setPersonnel(updated);
     syncToDatabase(updated, `Removed ${officer.name} from squad`);
     showToast(`✓ Removed ${officer.name} from squad.`, "info");
+  };
+
+  // Helper function to extract numeric order for squads (supports Gujarati digits ૦-૯ & Latin digits 0-9)
+  const parseSquadNumber = (code: string): number => {
+    if (!code) return 999;
+    const gujaratiToAscii: Record<string, string> = {
+      "૦": "0", "૧": "1", "૨": "2", "૩": "3", "૪": "4",
+      "૫": "5", "૬": "6", "૭": "7", "૮": "8", "૯": "9"
+    };
+    const normalized = code.replace(/[૦-૯]/g, (d) => gujaratiToAscii[d] || d);
+    const match = normalized.match(/\d+/);
+    return match ? parseInt(match[0], 10) : 999;
+  };
+
+  // ---------------------------------------------------------------------------
+  // SQUADS MASTER MANAGEMENT (DEFAULT 10: સ્કોડ-૦૧ થી સ્કોડ-૧૦, EXPAND / REDUCE)
+  // ---------------------------------------------------------------------------
+  const handleResetTo10Squads = async () => {
+    if (!isPrivileged) return;
+    setSquadList(DEFAULT_SQUADS);
+    await saveSquadsList(DEFAULT_SQUADS, currentUser?.name || "Super Admin");
+
+    // Also normalize any personnel currently assigned to squads > 10 so roster is 100% clean
+    let remappedCount = 0;
+    const updated = personnel.map((p) => {
+      const num = parseSquadNumber(p.code);
+      if (num > 10 || !p.code.includes("સ્કોડ")) {
+        const targetNum = ((Math.max(1, num) - 1) % 10) + 1;
+        const targetSquad = DEFAULT_SQUADS[targetNum - 1] || "સ્કોડ-૦૧";
+        remappedCount++;
+        return {
+          ...p,
+          code: targetSquad,
+          dutyPlace: p.dutyPlace && p.dutyPlace.includes("સ્કોડ") ? targetSquad : p.dutyPlace
+        };
+      }
+      return p;
+    });
+
+    if (remappedCount > 0) {
+      setPersonnel(updated);
+      await syncToDatabase(updated, "Normalized all personnel squads to Squads 01-10");
+      showToast(
+        language === "gu"
+          ? `✓ સ્કોડ-૦૧ થી સ્કોડ-૧૦ (કુલ ૧૦ સ્કોડ) સેટ કરવામાં આવી! ${remappedCount} કર્મચારીઓને ૧-૧૦ માં ગોઠવ્યા.`
+          : `✓ Successfully set Squads 01 to 10 (${remappedCount} personnel mapped to Squads 01-10).`,
+        "success"
+      );
+    } else {
+      showToast(
+        language === "gu"
+          ? "✓ સ્કોડ-૦૧ થી સ્કોડ-૧૦ સેટ કરવામાં આવી (કુલ ૧૦ સ્કોડ)."
+          : "✓ Squads 01 to 10 configured (Total 10 squads).",
+        "success"
+      );
+    }
+  };
+
+  const handleAddCustomSquad = async (nameToAdd?: string) => {
+    if (!isPrivileged) return;
+    const raw = (nameToAdd !== undefined ? nameToAdd : newSquadNameInput).trim();
+    if (!raw) {
+      showToast(language === "gu" ? "કૃપા કરીને સ્કોડનું નામ દાખલ કરો!" : "Please enter squad name!", "warning");
+      return;
+    }
+
+    if (squadList.includes(raw)) {
+      showToast(language === "gu" ? "આ સ્કોડ પહેલેથી હાજર છે!" : "This squad already exists!", "warning");
+      return;
+    }
+
+    const updated = [...squadList, raw].sort((a, b) => {
+      const numA = parseSquadNumber(a);
+      const numB = parseSquadNumber(b);
+      if (numA !== numB) return numA - numB;
+      return a.localeCompare(b);
+    });
+
+    setSquadList(updated);
+    await saveSquadsList(updated, currentUser?.name || "Super Admin");
+    setIsAddSquadModalOpen(false);
+    setNewSquadNameInput("");
+    showToast(
+      language === "gu"
+        ? `✓ નવી સ્કોડ "${raw}" સફળતાપૂર્વક ઉમેરાઈ ગઈ (હવે કુલ ${updated.length} સ્કોડ).`
+        : `✓ Squad "${raw}" added successfully (Total ${updated.length} squads).`,
+      "success"
+    );
+  };
+
+  const handleDeleteSquad = async (squadToDelete: string) => {
+    if (!isPrivileged) return;
+    if (squadList.length <= 1) {
+      showToast(language === "gu" ? "ઓછામાં ઓછી એક સ્કોડ હોવી જરૂરી છે!" : "At least one squad must remain!", "warning");
+      return;
+    }
+
+    const assignedOfficers = personnel.filter((p) => p.code === squadToDelete);
+    if (assignedOfficers.length > 0) {
+      const confirmShift = window.confirm(
+        language === "gu"
+          ? `"${squadToDelete}" માં ${assignedOfficers.length} અધિકારીઓ છે. શું તમે આ સ્કોડ કાઢી નાખી તે તમામ અધિકારીઓને "સ્કોડ-૦૧" માં ફાળવવા માંગો છો?`
+          : `"${squadToDelete}" has ${assignedOfficers.length} officers. Delete squad and shift officers to "સ્કોડ-૦૧"?`
+      );
+      if (!confirmShift) return;
+
+      const updatedPersonnel = personnel.map((p) =>
+        p.code === squadToDelete ? { ...p, code: "સ્કોડ-૦૧", dutyPlace: p.dutyPlace === squadToDelete ? "સ્કોડ-૦૧" : p.dutyPlace } : p
+      );
+      setPersonnel(updatedPersonnel);
+      await syncToDatabase(updatedPersonnel, `Shifted officers from deleted ${squadToDelete} to સ્કોડ-૦૧`);
+    }
+
+    const updated = squadList.filter((s) => s !== squadToDelete);
+    setSquadList(updated);
+    await saveSquadsList(updated, currentUser?.name || "Super Admin");
+    showToast(
+      language === "gu"
+        ? `✓ "${squadToDelete}" સ્કોડ હટાવી દેવામાં આવી (હવે કુલ ${updated.length} સ્કોડ).`
+        : `✓ "${squadToDelete}" removed (Total ${updated.length} squads remaining).`,
+      "info"
+    );
   };
 
   // ---------------------------------------------------------------------------
@@ -1413,10 +1548,15 @@ export default function App() {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // FILTERING, SORTING & AGGREGATIONS
-  // ---------------------------------------------------------------------------
-  const uniqueSquads = useMemo(() => Array.from(new Set(personnel.map((p) => p.code).filter(Boolean))), [personnel]);
+  const uniqueSquads = useMemo(() => {
+    const list = squadList.length > 0 ? squadList : DEFAULT_SQUADS;
+    return [...list].sort((a, b) => {
+      const numA = parseSquadNumber(a);
+      const numB = parseSquadNumber(b);
+      if (numA !== numB) return numA - numB;
+      return a.localeCompare(b);
+    });
+  }, [squadList]);
   const uniqueDesignations = useMemo(() => Array.from(new Set(personnel.map((p) => p.designation).filter(Boolean))), [personnel]);
   const uniqueAppointments = useMemo(() => Array.from(new Set(personnel.map((p) => p.appointment).filter(Boolean))), [personnel]);
   const uniqueBloodGroups = useMemo(() => Array.from(new Set(personnel.map((p) => p.bloodGroup).filter(Boolean))), [personnel]);
@@ -2951,23 +3091,52 @@ export default function App() {
         {/* ----------------------------------------------------------------- */}
         {activeNav === "squads" && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-800">
               <div>
-                <h2 className="text-base font-black text-white flex items-center gap-2">
-                  <Users className="w-5 h-5 text-amber-400" />
-                  <span>સ્કોડ ડિરેક્ટરી અને અધિકારી ફાળવણી (Squad Management & Reassignment)</span>
-                </h2>
-                <p className="text-xs text-slate-400">Add, remove, or replace officers in any operational squad.</p>
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h2 className="text-base font-black text-white flex items-center gap-2">
+                    <Users className="w-5 h-5 text-amber-400" />
+                    <span>સ્કોડ ડિરેક્ટરી અને સંચાલન (Squad Management & Directory)</span>
+                  </h2>
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-mono font-bold text-xs border border-amber-500/40">
+                    કુલ સ્કોડ: {uniqueSquads.length} ({uniqueSquads[0]} થી {uniqueSquads[uniqueSquads.length - 1] || "૧૦"})
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {language === "gu"
+                    ? "સ્કોડ-૦૧ થી સ્કોડ-૧૦ નું સંપૂર્ણ સંચાલન. જરૂર મુજબ નવી સ્કોડ ઉમેરી કે ઘટાડી શકાય છે."
+                    : "Manage active squads (Squad 01 to 10). Add or remove squads anytime as operational requirements change."}
+                </p>
               </div>
 
               {isPrivileged && (
-                <button
-                  onClick={() => handleOpenSquadAssign(targetSquadCode || "સ્કોડ-૦૧", "add")}
-                  className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add Officer to Squad</span>
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => setIsAddSquadModalOpen(true)}
+                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow transition active:scale-95"
+                    title={language === "gu" ? "નવી સ્કોડ ઉમેરો (સ્કોડ સંખ્યામાં વધારો)" : "Add New Squad"}
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{language === "gu" ? "+ નવી સ્કોડ ઉમેરો" : "+ Add New Squad"}</span>
+                  </button>
+
+                  <button
+                    onClick={handleResetTo10Squads}
+                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 hover:text-amber-200 border border-amber-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
+                    title={language === "gu" ? "સ્કોડ સંખ્યા ૧૦ કરો (સ્કોડ-૦૧ થી સ્કોડ-૧૦ રીસેટ કરો)" : "Reset to 10 Squads (01 to 10)"}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>{language === "gu" ? "૧૦ સ્કોડ રીસેટ કરો" : "Reset 10 Squads"}</span>
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenSquadAssign(targetSquadCode || "સ્કોડ-૦૧", "add")}
+                    className="px-3 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow transition active:scale-95"
+                  >
+                    <UserPlus className="w-4 h-4" />
+                    <span>{language === "gu" ? "સ્ટાફ ફાળવો" : "Assign Officer"}</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -2976,22 +3145,32 @@ export default function App() {
               {uniqueSquads.map((squadCode) => {
                 const squadMembers = personnel.filter((p) => p.code === squadCode);
                 return (
-                  <div key={squadCode} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col justify-between space-y-3">
+                  <div key={squadCode} className="p-4 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl flex flex-col justify-between space-y-3 hover:border-slate-700 transition">
                     <div className="flex items-center justify-between pb-2.5 border-b border-slate-800">
                       <div className="flex items-center gap-2">
                         <span className="px-2.5 py-1 bg-amber-500/20 text-amber-400 border border-amber-500/30 font-mono font-black text-xs rounded-lg">
                           {squadCode}
                         </span>
-                        <span className="text-xs text-slate-400 font-semibold">{squadMembers.length} officers assigned</span>
+                        <span className="text-xs text-slate-400 font-semibold">{squadMembers.length} {language === "gu" ? "કર્મચારીઓ" : "officers"}</span>
                       </div>
 
                       {isPrivileged && (
-                        <button
-                          onClick={() => handleOpenSquadAssign(squadCode, "add")}
-                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold rounded-lg border border-slate-700 transition"
-                        >
-                          + Assign
-                        </button>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenSquadAssign(squadCode, "add")}
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold rounded-lg border border-slate-700 transition"
+                            title={language === "gu" ? "આ સ્કોડમાં કર્મચારી ઉમેરો" : "Assign Officer"}
+                          >
+                            + Assign
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSquad(squadCode)}
+                            className="p-1.5 bg-rose-500/20 hover:bg-rose-600 text-rose-400 hover:text-white rounded-lg transition"
+                            title={language === "gu" ? `આ "${squadCode}" સ્કોડ કાઢી નાખો (ઘટાડો)` : `Delete ${squadCode}`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -3871,6 +4050,87 @@ export default function App() {
       </AnimatePresence>
 
       {/* =================================================================== */}
+      {/* ADD NEW SQUAD MODAL (EXPAND SQUADS / વધારો)                         */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {isAddSquadModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-950 border border-emerald-500/50 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Plus className="w-5 h-5 text-emerald-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-black text-white">
+                    {language === "gu" ? "નવી સ્કોડ ઉમેરો (Add New Squad)" : "Add New Squad"}
+                  </h2>
+                </div>
+                <button onClick={() => setIsAddSquadModalOpen(false)} className="text-slate-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 text-xs">
+                <div className="space-y-1.5">
+                  <label className="text-slate-300 font-bold block">
+                    {language === "gu" ? "સ્કોડનું નામ અથવા નંબર દાખલ કરો:" : "Squad Name / Code:"}
+                  </label>
+                  <input
+                    type="text"
+                    value={newSquadNameInput}
+                    onChange={(e) => setNewSquadNameInput(e.target.value)}
+                    placeholder="દા.ત. સ્કોડ-૧૧, સ્કોડ-૧૨, સાયબર સ્કોડ"
+                    className="w-full bg-slate-900 border border-slate-800 focus:border-emerald-500 rounded-xl px-3.5 py-2.5 text-white text-xs font-mono focus:outline-none"
+                    autoFocus
+                  />
+                </div>
+
+                {/* Quick Suggestion Chips */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] text-slate-400 font-semibold block">
+                    {language === "gu" ? "ઝડપી સૂચનો (Quick Suggestions):" : "Quick Suggestions:"}
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {["સ્કોડ-૧૧", "સ્કોડ-૧૨", "સ્કોડ-૧૩", "સ્કોડ-૧૪", "સ્કોડ-૧૫", "સાયબર સ્કોડ", "ઓપરેશન સ્કોડ"].map((sug) => (
+                      <button
+                        key={sug}
+                        type="button"
+                        onClick={() => setNewSquadNameInput(sug)}
+                        className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-amber-300 rounded-lg border border-slate-800 text-[11px] font-mono transition"
+                      >
+                        + {sug}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setIsAddSquadModalOpen(false)}
+                    className="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddCustomSquad()}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl shadow-lg transition flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{language === "gu" ? "સ્કોડ ઉમેરો" : "Add Squad"}</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
       {/* SUPABASE CONNECTION CONFIG MODAL (IN-MEMORY, NO LOCAL STORAGE)      */}
       {/* =================================================================== */}
       <AnimatePresence>
@@ -4091,6 +4351,23 @@ export default function App() {
                         <p className="text-[11px] text-slate-400">Repairs missing fields and duty/appointment mapping.</p>
                         <button onClick={handleFixAndAlignColumns} className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg transition">
                           Fix Column Integrity
+                        </button>
+                      </div>
+
+                      <div className="p-3 bg-slate-900 border border-amber-500/30 rounded-xl space-y-1.5 min-[480px]:col-span-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-amber-400 block">5. સ્કોડ ૧ થી ૧૦ સેટ કરો (Squads 01 to 10 Roster)</span>
+                          <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[10px] font-bold">
+                            કુલ: {uniqueSquads.length} સ્કોડ
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400">
+                          {language === "gu"
+                            ? "સ્કોડ સંખ્યા ૩૫ ને બદલે સ્કોડ-૦૧ થી સ્કોડ-૧૦ (કુલ ૧૦ સ્કોડ) સેટ કરો અને સ્ટાફને યોગ્ય રીતે ૧ થી ૧૦ સ્કોડમાં ફાળવો."
+                            : "Resets squad structure to Squads 01 to 10 (Total 10 squads) and neatly normalizes roster personnel into Squads 01 to 10."}
+                        </p>
+                        <button onClick={handleResetTo10Squads} className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg transition">
+                          Set Squads 01 to 10 Now
                         </button>
                       </div>
                     </div>
@@ -4579,7 +4856,16 @@ export default function App() {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="space-y-1">
                     <label className="text-slate-400 font-semibold">{t.squad}</label>
-                    <input type="text" value={formData.code} onChange={(e) => setFormData({ ...formData, code: e.target.value })} className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-white" required />
+                    <select
+                      value={formData.code}
+                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-amber-300 font-mono font-bold focus:outline-none focus:border-amber-500"
+                      required
+                    >
+                      {uniqueSquads.map((sq) => (
+                        <option key={sq} value={sq}>{sq}</option>
+                      ))}
+                    </select>
                   </div>
                   <div className="space-y-1">
                     <label className="text-slate-400 font-semibold">{t.designation}</label>
