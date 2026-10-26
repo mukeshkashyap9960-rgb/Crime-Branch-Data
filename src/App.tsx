@@ -1561,14 +1561,14 @@ export default function App() {
     mobile: language === "gu" ? "મોબાઇલ નંબર" : "Mobile No.",
     dutyPlace: language === "gu" ? "ફરજની જગ્યા" : "Duty Place",
     appointment: language === "gu" ? "નીમણુંક" : "Appointment",
-    reportDate: language === "gu" ? "હાજર તારીખ" : "Reporting Date",
+    reportDate: language === "gu" ? "ક્રાઇમ હાજર તારીખ" : "Crime Reporting Date",
     birthDate: language === "gu" ? "જન્મ તારીખ" : "Birth Date",
     recruitedDate: language === "gu" ? "ભરતી તારીખ" : "Recruited Date",
     retirementDate: language === "gu" ? "વય નિવૃત તારીખ" : "Retirement Date",
     aadhar: language === "gu" ? "આધાર કાર્ડ નંબર" : "Aadhaar Card No.",
     pan: language === "gu" ? "પાન કાર્ડ નંબર" : "PAN Card No.",
     blood: language === "gu" ? "બ્લડ ગ્રુપ" : "Blood Group",
-    weapon: language === "gu" ? "હથિયાર નં." : "Weapon No.",
+    weapon: "HRPN No.",
     tenure: language === "gu" ? "સેવા સમયગાળો" : "Worked Tenure"
   };
 
@@ -2595,6 +2595,14 @@ export default function App() {
                         <span className="text-slate-300 font-medium truncate block">{p.dutyPlace}</span>
                       </div>
                       <div>
+                        <span className="text-[10px] text-slate-500 block">HRPN No.:</span>
+                        <span className="text-slate-300 font-mono font-semibold">{maskWeapon(p.weaponNo)}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-500 block">{t.reportDate}:</span>
+                        <span className="text-slate-300 font-mono">{p.reportDate || "-"}</span>
+                      </div>
+                      <div>
                         <span className="text-[10px] text-slate-500 block">{t.retirementDate}:</span>
                         <span className="text-amber-400 font-mono font-semibold">{p.retirementDate || "-"}</span>
                       </div>
@@ -3280,7 +3288,7 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    {language === "gu" ? "હાજર તારીખથી આજ સુધી થયેલ સેવા ગણતરી" : "Calculated from appointment / reporting date to today"}
+                    {language === "gu" ? "ક્રાઇમ હાજર તારીખથી આજ સુધી થયેલ સેવા ગણતરી" : "Calculated from crime reporting date to today"}
                   </p>
                 </div>
 
@@ -3903,7 +3911,7 @@ export default function App() {
                 <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl space-y-1">
                   <span className="font-bold text-emerald-400 block">Expected Column Sequence:</span>
                   <p className="text-[11px] text-slate-400 font-mono">
-                    અ.નં. • Code • હોદ્દો • બ.નં. • નામ • મોબાઇલ નંબર • ફરજની જગ્યા • નીમણૂંક • હાજર તારીખ • જન્મ તારીખ • ભરતી તારીખ • વય નિવૃત તારીખ • આધાર • પાન
+                    અ.નં. • Code • હોદ્દો • બ.નં. • નામ • મોબાઇલ નંબર • ફરજની જગ્યા • નીમણૂંક • ક્રાઇમ હાજર તારીખ • જન્મ તારીખ • ભરતી તારીખ • વય નિવૃત તારીખ • આધાર • પાન
                   </p>
                 </div>
 
