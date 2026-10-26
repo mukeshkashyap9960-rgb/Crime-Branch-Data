@@ -216,7 +216,7 @@ export const initialPersonnel: Personnel[] = [
     panNo: "BKAPG9941K",
     bloodGroup: "O+",
     weaponNo: "WP-8419",
-    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&auto=format&fit=crop&q=85",
     appointmentDate: "01/12/2023",
     notes: "Senior investigating officer with excellent record in Squad 01.",
     customFields: {}
@@ -239,7 +239,7 @@ export const initialPersonnel: Personnel[] = [
     panNo: "CKAPL8823M",
     bloodGroup: "B+",
     weaponNo: "WP-8747",
-    avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+    avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&auto=format&fit=crop&q=85",
     appointmentDate: "09/04/2026",
     notes: "Attached from SG-2 Police Station.",
     customFields: {}
@@ -262,7 +262,7 @@ export const initialPersonnel: Personnel[] = [
     panNo: "DKAPM7712N",
     bloodGroup: "A+",
     weaponNo: "WP-8557",
-    avatarUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80",
+    avatarUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=500&auto=format&fit=crop&q=85",
     appointmentDate: "29/01/2024",
     notes: "Head Constable specializing in digital surveillance.",
     customFields: {}
@@ -285,7 +285,7 @@ export const initialPersonnel: Personnel[] = [
     panNo: "EKAPN6601P",
     bloodGroup: "AB+",
     weaponNo: "WP-3453",
-    avatarUrl: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&auto=format&fit=crop&q=80",
+    avatarUrl: "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=500&auto=format&fit=crop&q=85",
     appointmentDate: "29/11/2023",
     notes: "Operative in Squad 01 crime tracking.",
     customFields: {}
@@ -308,7 +308,7 @@ export const initialPersonnel: Personnel[] = [
     panNo: "FKAPO5590Q",
     bloodGroup: "O-",
     weaponNo: "WP-8539",
-    avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80",
+    avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=500&auto=format&fit=crop&q=85",
     appointmentDate: "01/04/2025",
     notes: "Squad 07 operative.",
     customFields: {}
@@ -316,13 +316,13 @@ export const initialPersonnel: Personnel[] = [
 ];
 
 const PRESET_AVATARS = [
-  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
-  "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=150&auto=format&fit=crop&q=80"
+  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&auto=format&fit=crop&q=85",
+  "https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=500&auto=format&fit=crop&q=85"
 ];
 
 export default function App() {
@@ -431,6 +431,8 @@ export default function App() {
   const [photoTargetOfficer, setPhotoTargetOfficer] = useState<Personnel | null>(null);
   const [photoUrlInput, setPhotoUrlInput] = useState("");
   const [photoPreview, setPhotoPreview] = useState("");
+  // Enlarged Photo Viewer Modal (High-clarity inspection)
+  const [enlargedPhotoOfficer, setEnlargedPhotoOfficer] = useState<Personnel | null>(null);
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" | "warning" } | null>(null);
@@ -2596,14 +2598,36 @@ export default function App() {
                         className="hover:bg-slate-800/60 transition cursor-pointer"
                       >
                         <td className="p-3 font-mono font-bold text-slate-400">{p.srNo}</td>
-                        <td className="p-3" onClick={(e) => { e.stopPropagation(); handleOpenPhotoModal(p); }}>
-                          <img
-                            src={p.avatarUrl || PRESET_AVATARS[0]}
-                            alt={p.name}
-                            className="w-8 h-8 rounded-full object-cover border border-amber-500/40 hover:border-amber-400 cursor-pointer shadow hover:scale-105 transition"
-                            loading="lazy"
-                            title="ફોટો અપલોડ / URL બદલો (Change Photo / URL)"
-                          />
+                        <td className="p-2 sm:p-3" onClick={(e) => e.stopPropagation()}>
+                          <div className="relative group/avatar inline-block">
+                            <img
+                              src={p.avatarUrl || PRESET_AVATARS[0]}
+                              alt={p.name}
+                              className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 hover:border-amber-400 cursor-pointer shadow-md transition-all duration-200 group-hover/avatar:scale-105 group-hover/avatar:ring-2 group-hover/avatar:ring-amber-400/50"
+                              loading="lazy"
+                              onClick={() => setEnlargedPhotoOfficer(p)}
+                              title={language === "gu" ? "ક્લિક કરીને મોટો ફોટો જુઓ (Click to view large photo)" : "Click to view large photo"}
+                            />
+                            {/* Quick Action Overlay Buttons */}
+                            <div className="absolute -bottom-1 -right-1 flex items-center gap-0.5 opacity-90 group-hover/avatar:opacity-100 transition">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenPhotoModal(p)}
+                                className="p-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-md cursor-pointer shadow transition"
+                                title={language === "gu" ? "ફોટો બદલો / અપલોડ કરો (Change Photo)" : "Change Photo"}
+                              >
+                                <Camera className="w-2.5 h-2.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEnlargedPhotoOfficer(p)}
+                                className="p-1 bg-slate-900/90 hover:bg-slate-800 text-amber-300 rounded-md cursor-pointer shadow border border-slate-700 transition"
+                                title={language === "gu" ? "મોટો ફોટો જુઓ (Inspect Photo)" : "Inspect Photo"}
+                              >
+                                <Eye className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+                          </div>
                         </td>
                         <td className="p-3 font-mono text-amber-400 font-bold">{p.code}</td>
                         <td className="p-3">
@@ -2756,26 +2780,39 @@ export default function App() {
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2.5">
-                      <div className="flex items-center gap-3">
-                        <div className="relative group">
+                      <div className="flex items-center gap-3.5">
+                        <div className="relative group flex-shrink-0">
                           <img
                             src={p.avatarUrl || PRESET_AVATARS[0]}
                             alt={p.name}
-                            className="w-11 h-11 min-[360px]:w-12 min-[360px]:h-12 rounded-full object-cover border-2 border-amber-500/50 group-hover:border-amber-400 shadow cursor-pointer transition"
+                            className="w-20 h-20 min-[360px]:w-24 min-[360px]:h-24 rounded-2xl object-cover border-2 border-amber-500/70 group-hover:border-amber-400 shadow-xl cursor-pointer transition-all duration-200 group-hover:scale-105"
                             loading="lazy"
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleOpenPhotoModal(p);
+                              setEnlargedPhotoOfficer(p);
                             }}
-                            title="ફોટો અપલોડ / URL બદલો (Change / Upload Photo)"
+                            title={language === "gu" ? "ક્લિક કરીને મોટો ફોટો જુઓ (Click to inspect photo)" : "Click to inspect photo"}
                           />
+                          {/* Zoom Inspection Badge */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEnlargedPhotoOfficer(p);
+                            }}
+                            className="absolute top-1 left-1 px-1.5 py-0.5 bg-slate-950/85 backdrop-blur-xs rounded-md text-[9px] font-bold text-amber-300 opacity-0 group-hover:opacity-100 transition border border-slate-800 flex items-center gap-0.5 shadow"
+                            title="મોટો ફોટો (Enlarge)"
+                          >
+                            <Eye className="w-2.5 h-2.5" />
+                            <span>ઝૂમ</span>
+                          </button>
                           {/* Photo controls: 1. Computer Upload, 2. URL Input */}
-                          <div className="absolute -bottom-1 -right-2 flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                          <div className="absolute -bottom-1 -right-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             <label
-                              className="p-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-md cursor-pointer shadow transition"
-                              title="કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)"
+                              className="p-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg cursor-pointer shadow-lg transition"
+                              title={language === "gu" ? "કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)" : "Upload from Computer"}
                             >
-                              <Camera className="w-3 h-3" />
+                              <Camera className="w-3.5 h-3.5" />
                               <input
                                 type="file"
                                 accept="image/*"
@@ -2786,10 +2823,10 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => handleOpenPhotoModal(p)}
-                              className="p-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md cursor-pointer shadow transition"
-                              title="કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)"
+                              className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg cursor-pointer shadow-lg transition"
+                              title={language === "gu" ? "કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)" : "Enter Image URL"}
                             >
-                              <Link className="w-3 h-3" />
+                              <Link className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </div>
@@ -2960,8 +2997,14 @@ export default function App() {
                     <div className="space-y-2 max-h-60 overflow-y-auto">
                       {squadMembers.map((m) => (
                         <div key={m.id} className="p-2 bg-slate-950/80 border border-slate-800/80 rounded-xl flex items-center justify-between gap-2 text-xs">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <img src={m.avatarUrl || PRESET_AVATARS[0]} alt={m.name} className="w-7 h-7 rounded-full object-cover" />
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <img
+                              src={m.avatarUrl || PRESET_AVATARS[0]}
+                              alt={m.name}
+                              className="w-12 h-12 rounded-xl object-cover border border-amber-500/40 cursor-pointer shadow hover:scale-105 transition flex-shrink-0"
+                              onClick={() => setEnlargedPhotoOfficer(m)}
+                              title="ક્લિક કરીને મોટો ફોટો જુઓ"
+                            />
                             <div className="min-w-0">
                               <span className="font-bold text-white truncate block">{m.name}</span>
                               <span className="text-[10px] text-slate-400 font-mono">{m.designation} • {cleanBadge(m.badgeNo)}</span>
@@ -3375,19 +3418,30 @@ export default function App() {
               <div className="p-4 min-[360px]:p-6 space-y-4 max-h-[75vh] overflow-y-auto text-xs">
                 
                 {/* Officer Avatar & Header */}
-                <div className="flex items-center gap-3.5">
-                  <div className="relative group">
+                <div className="flex items-center gap-4">
+                  <div className="relative group flex-shrink-0">
                     <img
                       src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
                       alt={selectedOfficer.name}
-                      className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 hover:border-amber-400 cursor-pointer shadow-lg transition"
-                      onClick={() => handleOpenPhotoModal(selectedOfficer)}
-                      title="ફોટો અપલોડ / URL બદલો"
+                      className="w-24 h-24 min-[360px]:w-28 min-[360px]:h-28 rounded-3xl object-cover border-3 border-amber-500/80 hover:border-amber-400 cursor-pointer shadow-2xl transition-all duration-200 hover:scale-105"
+                      onClick={() => setEnlargedPhotoOfficer(selectedOfficer)}
+                      title={language === "gu" ? "ક્લિક કરીને સંપૂર્ણ મોટો ફોટો જુઓ" : "Click to view full photo"}
                     />
-                    <div className="absolute -bottom-1.5 -right-2 flex items-center gap-1">
+                    {/* Zoom button badge */}
+                    <button
+                      type="button"
+                      onClick={() => setEnlargedPhotoOfficer(selectedOfficer)}
+                      className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-slate-950/85 backdrop-blur-xs rounded-lg text-[10px] font-bold text-amber-300 opacity-90 hover:opacity-100 transition border border-slate-700 flex items-center gap-1 shadow"
+                      title="મોટો ફોટો (Enlarge)"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>ઝૂમ</span>
+                    </button>
+                    {/* Photo upload / change controls */}
+                    <div className="absolute -bottom-2 -right-2 flex items-center gap-1">
                       <label 
-                        className="p-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl cursor-pointer shadow-lg transition" 
-                        title="કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)"
+                        className="p-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl cursor-pointer shadow-lg transition" 
+                        title={language === "gu" ? "કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)" : "Upload from Computer"}
                       >
                         <Camera className="w-3.5 h-3.5" />
                         <input
@@ -3400,8 +3454,8 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleOpenPhotoModal(selectedOfficer)}
-                        className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg transition"
-                        title="કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)"
+                        className="p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg transition"
+                        title={language === "gu" ? "કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)" : "Enter Image URL"}
                       >
                         <Link className="w-3.5 h-3.5" />
                       </button>
@@ -3409,7 +3463,7 @@ export default function App() {
                   </div>
                   <div>
                     <h2 className="text-base min-[360px]:text-lg font-bold text-white">{selectedOfficer.name}</h2>
-                    <p className="text-xs text-amber-400 font-mono">{selectedOfficer.code} • {selectedOfficer.designation}</p>
+                    <p className="text-xs text-amber-400 font-mono font-semibold">{selectedOfficer.code} • {selectedOfficer.designation}</p>
                     <p className="text-xs text-slate-400 mt-0.5 font-mono">બક્કલ નંબર: {cleanBadge(selectedOfficer.badgeNo)}</p>
                   </div>
                 </div>
@@ -3791,7 +3845,7 @@ export default function App() {
                     .map((p) => (
                       <div key={p.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          <img src={p.avatarUrl || PRESET_AVATARS[0]} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
+                          <img src={p.avatarUrl || PRESET_AVATARS[0]} alt={p.name} className="w-12 h-12 rounded-xl object-cover border border-amber-500/40 shadow flex-shrink-0" />
                           <div className="min-w-0">
                             <span className="font-bold text-white block truncate">{p.name}</span>
                             <span className="text-[10px] text-slate-400 font-mono">Current: {p.code} • {cleanBadge(p.badgeNo)} ({p.designation})</span>
@@ -4265,22 +4319,24 @@ export default function App() {
               </div>
 
               <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto text-xs">
-                {/* Officer Mini Card */}
-                <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
-                  <div className="relative">
+                {/* Officer Mini Card with Large Crystal Clear Photo Preview */}
+                <div className="flex items-center gap-4 p-4 rounded-3xl bg-slate-900/90 border border-slate-800 shadow-lg">
+                  <div className="relative flex-shrink-0">
                     <img
                       src={photoPreview || PRESET_AVATARS[0]}
                       alt={photoTargetOfficer.name}
-                      className="w-16 h-16 rounded-2xl object-cover border-2 border-amber-500 shadow-lg"
+                      className="w-28 h-28 min-[360px]:w-32 min-[360px]:h-32 rounded-3xl object-cover border-3 border-amber-400 shadow-2xl"
                     />
-                    <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500 text-[9px] font-bold text-slate-950">
+                    <span className="absolute -top-2 -right-2 px-2 py-0.5 rounded-full bg-emerald-500 text-[10px] font-bold text-slate-950 shadow">
                       LIVE
                     </span>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-bold text-white text-sm truncate">{photoTargetOfficer.name}</h3>
-                    <p className="text-amber-400 font-mono text-[11px]">{photoTargetOfficer.designation} • {photoTargetOfficer.code}</p>
-                    <p className="text-slate-400 font-mono text-[11px]">બક્કલ નં: {cleanBadge(photoTargetOfficer.badgeNo)}</p>
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">અધિકારી ઓળખ (Officer Identity)</span>
+                    <h3 className="font-bold text-white text-base truncate">{photoTargetOfficer.name}</h3>
+                    <p className="text-amber-400 font-mono text-xs font-semibold">{photoTargetOfficer.designation} • {photoTargetOfficer.code}</p>
+                    <p className="text-slate-300 font-mono text-xs">બક્કલ નં: {cleanBadge(photoTargetOfficer.badgeNo)}</p>
+                    <p className="text-slate-400 text-[11px] truncate">{photoTargetOfficer.dutyPlace}</p>
                   </div>
                 </div>
 
@@ -4357,7 +4413,7 @@ export default function App() {
                   <span className="font-bold text-slate-200 block text-[11px]">
                     {language === "gu" ? "૩. અથવા પ્રીસેટ પોલીસ અવતાર પસંદ કરો:" : "3. Or Select Preset Police Avatar:"}
                   </span>
-                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1.5">
                     {PRESET_AVATARS.map((av, idx) => (
                       <button
                         key={idx}
@@ -4366,14 +4422,14 @@ export default function App() {
                           setPhotoPreview(av);
                           setPhotoUrlInput(av);
                         }}
-                        className={`relative rounded-full p-0.5 transition flex-shrink-0 ${
+                        className={`relative rounded-2xl p-1 transition flex-shrink-0 ${
                           photoPreview === av ? "ring-2 ring-amber-400 scale-105" : "opacity-75 hover:opacity-100"
                         }`}
                       >
                         <img
                           src={av}
                           alt="avatar"
-                          className="w-9 h-9 rounded-full object-cover"
+                          className="w-14 h-14 rounded-2xl object-cover shadow border border-slate-700"
                         />
                       </button>
                     ))}
@@ -4396,6 +4452,104 @@ export default function App() {
                   >
                     <Check className="w-4 h-4" />
                     <span>{language === "gu" ? "✓ ફોટો સેવ કરો" : "Save Photo"}</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* FULL-SIZE OFFICER PHOTO INSPECTION LIGHTBOX MODAL                   */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {enlargedPhotoOfficer && (
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-black/90 backdrop-blur-md"
+            onClick={() => setEnlargedPhotoOfficer(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 10 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-slate-950 border-2 border-amber-500/80 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-amber-400" />
+                  <h2 className="text-sm sm:text-base font-black text-white">
+                    {language === "gu" ? "અધિકારી ફોટો ઓળખ (Photo Identity)" : "Officer Photo Identity"}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setEnlargedPhotoOfficer(null)}
+                  className="p-1 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 flex flex-col items-center text-center space-y-4 max-h-[80vh] overflow-y-auto">
+                {/* Large high-clarity officer portrait */}
+                <div className="relative group">
+                  <img
+                    src={enlargedPhotoOfficer.avatarUrl || PRESET_AVATARS[0]}
+                    alt={enlargedPhotoOfficer.name}
+                    className="w-64 h-64 sm:w-80 sm:h-80 rounded-3xl object-cover border-4 border-amber-400 shadow-2xl ring-4 ring-amber-500/20"
+                  />
+                  <span className="absolute bottom-3 right-3 px-2.5 py-1 rounded-full bg-slate-950/80 backdrop-blur-md text-[11px] font-mono font-bold text-amber-300 border border-slate-700">
+                    {enlargedPhotoOfficer.code}
+                  </span>
+                </div>
+
+                {/* Officer Details */}
+                <div className="space-y-1.5 w-full">
+                  <h3 className="text-lg sm:text-xl font-black text-white">{enlargedPhotoOfficer.name}</h3>
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <span className="px-2.5 py-0.5 rounded-lg bg-indigo-500/20 text-indigo-300 text-xs font-bold border border-indigo-500/30">
+                      {enlargedPhotoOfficer.designation}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 text-xs font-mono font-bold border border-amber-500/30">
+                      બક્કલ નં: {cleanBadge(enlargedPhotoOfficer.badgeNo)}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
+                      {enlargedPhotoOfficer.appointment}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 font-medium pt-1">
+                    {t.dutyPlace}: <span className="text-slate-200">{enlargedPhotoOfficer.dutyPlace}</span>
+                  </p>
+                  <p className="text-xs text-slate-400 font-mono">
+                    HRPN No: <span className="text-amber-400 font-bold">{maskWeapon(enlargedPhotoOfficer.weaponNo)}</span> • મો: <span className="text-slate-200">{maskMobile(enlargedPhotoOfficer.mobile)}</span>
+                  </p>
+                </div>
+
+                {/* Quick Action Ribbon */}
+                <div className="grid grid-cols-2 gap-2 w-full pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const off = enlargedPhotoOfficer;
+                      setEnlargedPhotoOfficer(null);
+                      handleOpenPhotoModal(off);
+                    }}
+                    className="py-2.5 px-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow transition flex items-center justify-center gap-1.5"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>{language === "gu" ? "ફોટો બદલો / અપલોડ" : "Change Photo"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleShareOfficer(enlargedPhotoOfficer);
+                    }}
+                    className="py-2.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl text-xs shadow transition flex items-center justify-center gap-1.5"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    <span>{language === "gu" ? "વિગત શેર કરો" : "Share Details"}</span>
                   </button>
                 </div>
               </div>
