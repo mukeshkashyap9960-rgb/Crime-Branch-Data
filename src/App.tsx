@@ -2510,7 +2510,7 @@ export default function App() {
                       </div>
                     </th>
 
-                    <th className="p-3">{t.photo}</th>
+                    <th className="p-2 sm:p-3 w-20 min-w-[76px] text-center">{t.photo}</th>
 
                     <th onClick={() => handleSort("code")} className="p-3 cursor-pointer hover:text-white transition">
                       <div className="flex items-center gap-1">
@@ -2598,18 +2598,19 @@ export default function App() {
                         className="hover:bg-slate-800/60 transition cursor-pointer"
                       >
                         <td className="p-3 font-mono font-bold text-slate-400">{p.srNo}</td>
-                        <td className="p-2 sm:p-3" onClick={(e) => e.stopPropagation()}>
-                          <div className="relative group/avatar inline-block">
+                        <td className="p-2 sm:p-3 w-20 min-w-[76px] align-middle text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="relative group/avatar inline-flex items-center justify-center w-14 h-14 min-w-[56px] min-h-[56px] sm:w-16 sm:h-16 sm:min-w-[64px] sm:min-h-[64px] shrink-0 mx-auto">
                             <img
                               src={p.avatarUrl || PRESET_AVATARS[0]}
                               alt={p.name}
-                              className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 hover:border-amber-400 cursor-pointer shadow-md transition-all duration-200 group-hover/avatar:scale-105 group-hover/avatar:ring-2 group-hover/avatar:ring-amber-400/50"
+                              style={{ width: "100%", height: "100%", aspectRatio: "1 / 1" }}
+                              className="w-14 h-14 min-w-[56px] min-h-[56px] max-w-[56px] max-h-[56px] sm:w-16 sm:h-16 sm:min-w-[64px] sm:min-h-[64px] sm:max-w-[64px] sm:max-h-[64px] aspect-square shrink-0 rounded-xl object-cover object-top border-2 border-amber-500/60 hover:border-amber-400 cursor-pointer shadow-md transition-all duration-200 group-hover/avatar:scale-105 group-hover/avatar:ring-2 group-hover/avatar:ring-amber-400/50 block"
                               loading="lazy"
                               onClick={() => setEnlargedPhotoOfficer(p)}
                               title={language === "gu" ? "ક્લિક કરીને મોટો ફોટો જુઓ (Click to view large photo)" : "Click to view large photo"}
                             />
                             {/* Quick Action Overlay Buttons */}
-                            <div className="absolute -bottom-1 -right-1 flex items-center gap-0.5 opacity-90 group-hover/avatar:opacity-100 transition">
+                            <div className="absolute -bottom-1 -right-1 flex items-center gap-0.5 opacity-90 group-hover/avatar:opacity-100 transition z-10 pointer-events-auto">
                               <button
                                 type="button"
                                 onClick={() => handleOpenPhotoModal(p)}
@@ -2781,11 +2782,12 @@ export default function App() {
                   <div>
                     <div className="flex items-start justify-between gap-2.5">
                       <div className="flex items-center gap-3.5">
-                        <div className="relative group flex-shrink-0">
+                        <div className="relative group shrink-0 aspect-square">
                           <img
                             src={p.avatarUrl || PRESET_AVATARS[0]}
                             alt={p.name}
-                            className="w-20 h-20 min-[360px]:w-24 min-[360px]:h-24 rounded-2xl object-cover border-2 border-amber-500/70 group-hover:border-amber-400 shadow-xl cursor-pointer transition-all duration-200 group-hover:scale-105"
+                            style={{ aspectRatio: "1 / 1" }}
+                            className="w-20 h-20 min-[360px]:w-24 min-[360px]:h-24 aspect-square shrink-0 rounded-2xl object-cover object-top border-2 border-amber-500/70 group-hover:border-amber-400 shadow-xl cursor-pointer transition-all duration-200 group-hover:scale-105 block"
                             loading="lazy"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -3419,11 +3421,12 @@ export default function App() {
                 
                 {/* Officer Avatar & Header */}
                 <div className="flex items-center gap-4">
-                  <div className="relative group flex-shrink-0">
+                  <div className="relative group shrink-0 aspect-square">
                     <img
                       src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
                       alt={selectedOfficer.name}
-                      className="w-24 h-24 min-[360px]:w-28 min-[360px]:h-28 rounded-3xl object-cover border-3 border-amber-500/80 hover:border-amber-400 cursor-pointer shadow-2xl transition-all duration-200 hover:scale-105"
+                      style={{ aspectRatio: "1 / 1" }}
+                      className="w-24 h-24 min-[360px]:w-28 min-[360px]:h-28 aspect-square shrink-0 rounded-3xl object-cover object-top border-3 border-amber-500/80 hover:border-amber-400 cursor-pointer shadow-2xl transition-all duration-200 hover:scale-105 block"
                       onClick={() => setEnlargedPhotoOfficer(selectedOfficer)}
                       title={language === "gu" ? "ક્લિક કરીને સંપૂર્ણ મોટો ફોટો જુઓ" : "Click to view full photo"}
                     />
