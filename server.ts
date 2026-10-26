@@ -28,16 +28,9 @@ const SQUADS_FILE = path.join(DATA_DIR, "squads.json");
 const SUPABASE_CONFIG_FILE = path.join(DATA_DIR, "supabase-config.json");
 
 const DEFAULT_SQUADS = [
-  "સ્કોડ-૦૧",
-  "સ્કોડ-૦૨",
-  "સ્કોડ-૦૩",
-  "સ્કોડ-૦૪",
-  "સ્કોડ-૦૫",
-  "સ્કોડ-૦૬",
-  "સ્કોડ-૦૭",
-  "સ્કોડ-૦૮",
-  "સ્કોડ-૦૯",
-  "સ્કોડ-૧૦"
+  "સ્કોડ-૦૧", "સ્કોડ-૦૨", "સ્કોડ-૦૩", "સ્કોડ-૦૪", "સ્કોડ-૦૫",
+  "સ્કોડ-૦૬", "સ્કોડ-૦૭", "સ્કોડ-૦૮", "સ્કોડ-૦૯", "સ્કોડ-૧૦",
+  "JCP READER", "DCP READER", "SAMAS", "ADMIN"
 ];
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });

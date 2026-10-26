@@ -1549,14 +1549,16 @@ export default function App() {
   };
 
   const uniqueSquads = useMemo(() => {
-    const list = squadList.length > 0 ? squadList : DEFAULT_SQUADS;
-    return [...list].sort((a, b) => {
+    const baseList = squadList.length > 0 ? squadList : DEFAULT_SQUADS;
+    const personnelCodes = personnel.map((p) => p.code).filter(Boolean);
+    const combined = Array.from(new Set([...baseList, ...personnelCodes]));
+    return combined.sort((a, b) => {
       const numA = parseSquadNumber(a);
       const numB = parseSquadNumber(b);
       if (numA !== numB) return numA - numB;
       return a.localeCompare(b);
     });
-  }, [squadList]);
+  }, [squadList, personnel]);
   const uniqueDesignations = useMemo(() => Array.from(new Set(personnel.map((p) => p.designation).filter(Boolean))), [personnel]);
   const uniqueAppointments = useMemo(() => Array.from(new Set(personnel.map((p) => p.appointment).filter(Boolean))), [personnel]);
   const uniqueBloodGroups = useMemo(() => Array.from(new Set(personnel.map((p) => p.bloodGroup).filter(Boolean))), [personnel]);

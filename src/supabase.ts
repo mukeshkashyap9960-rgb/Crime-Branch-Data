@@ -596,16 +596,9 @@ export async function deleteSquadTask(taskId: string): Promise<{ success: boolea
 // 3.1 MANAGED SQUADS LIST (DEFAULT: સ્કોડ-૦૧ થી સ્કોડ-૧૦, TOTAL 10 SQUADS)
 // ---------------------------------------------------------------------------
 export const DEFAULT_SQUADS = [
-  "સ્કોડ-૦૧",
-  "સ્કોડ-૦૨",
-  "સ્કોડ-૦૩",
-  "સ્કોડ-૦૪",
-  "સ્કોડ-૦૫",
-  "સ્કોડ-૦૬",
-  "સ્કોડ-૦૭",
-  "સ્કોડ-૦૮",
-  "સ્કોડ-૦૯",
-  "સ્કોડ-૧૦"
+  "સ્કોડ-૦૧", "સ્કોડ-૦૨", "સ્કોડ-૦૩", "સ્કોડ-૦૪", "સ્કોડ-૦૫",
+  "સ્કોડ-૦૬", "સ્કોડ-૦૭", "સ્કોડ-૦૮", "સ્કોડ-૦૯", "સ્કોડ-૧૦",
+  "JCP READER", "DCP READER", "SAMAS", "ADMIN"
 ];
 
 export async function fetchSquadsList(): Promise<string[]> {
