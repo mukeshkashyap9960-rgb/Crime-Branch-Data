@@ -755,7 +755,7 @@ export default function App() {
     const session: UserSession = {
       id: `user-officer-${badge}`,
       role: assignedRole,
-      name: matched ? matched.name : `Officer #${badge}`,
+      name: matched ? matched.name : `Officer ${badge}`,
       badgeNo: badge,
       mobile: mob
     };
@@ -863,24 +863,27 @@ export default function App() {
     return `WP-***${val.slice(-2)}`;
   };
 
+  // Global Helper: Clean badge number without any leading '#' symbol
+  const cleanBadge = (badge: string | undefined | null) => (badge || "").replace(/^#/, "").trim();
+
   // ---------------------------------------------------------------------------
   // SHARE OFFICER DETAILS & WHATSAPP MESSAGE FORMAT (COMPACT 3-LINE FORMAT)
   // ---------------------------------------------------------------------------
   const formatOfficerShareMessage = (p: Personnel): string => {
-    const cleanBadge = (p.badgeNo || "").replace(/^#/, "").trim();
+    const bNo = cleanBadge(p.badgeNo);
     const cleanMobile = (p.mobile || "").trim();
     const cleanName = (p.name || "").trim();
 
     return `નામ: ${cleanName || "-"}
 મોબાઇલ: ${cleanMobile || "-"}
-બ.નં : ${cleanBadge || "-"}`;
+બ.નં : ${bNo || "-"}`;
   };
 
   const formatOfficerFullShareMessage = (p: Personnel): string => {
-    const badge = p.badgeNo ? (p.badgeNo.startsWith("#") ? p.badgeNo : `#${p.badgeNo}`) : "-";
+    const badge = cleanBadge(p.badgeNo) || "-";
     const designationWithSquad = p.code ? `${p.designation} (${p.code})` : p.designation;
-    const mob = p.mobile || "-";
-    const duty = p.dutyPlace || "-";
+    const mob = (p.mobile || "").trim() || "-";
+    const duty = (p.dutyPlace || "").trim() || "-";
 
     return `👮 ગુજરાત પોલીસ - ક્રાઇમ બ્રાન્ચ (Gujarat Police - Crime Branch)
 ━━━━━━━━━━━━━━━━━━━━
@@ -1276,8 +1279,8 @@ export default function App() {
     if (!deleteTarget || !isPrivileged) return;
     const updated = personnel.filter((p) => p.id !== deleteTarget.id);
     setPersonnel(updated);
-    syncToDatabase(updated, `Deleted Officer #${deleteTarget.badgeNo} - ${deleteTarget.name}`);
-    showToast(`✓ Removed ${deleteTarget.name} (#${deleteTarget.badgeNo}).`, "info");
+    syncToDatabase(updated, `Deleted Officer ${cleanBadge(deleteTarget.badgeNo)} - ${deleteTarget.name}`);
+    showToast(`✓ Removed ${deleteTarget.name} (${cleanBadge(deleteTarget.badgeNo)}).`, "info");
     setDeleteTarget(null);
   };
 
@@ -2401,7 +2404,7 @@ export default function App() {
                             {p.designation}
                           </span>
                         </td>
-                        <td className="p-3 font-mono font-bold text-slate-300">#{p.badgeNo}</td>
+                        <td className="p-3 font-mono font-bold text-slate-300">{cleanBadge(p.badgeNo)}</td>
                         <td className="p-3 font-bold text-white max-w-[200px] truncate">{p.name}</td>
                         <td className="p-3 font-mono text-slate-300">{maskMobile(p.mobile)}</td>
 
@@ -2576,7 +2579,7 @@ export default function App() {
                             <span className="text-[10px] px-1.5 py-0.5 bg-slate-800 text-indigo-300 rounded font-semibold border border-slate-700">{p.designation}</span>
                           </div>
                           <h3 className="font-bold text-white text-xs min-[360px]:text-sm mt-0.5 truncate">{p.name}</h3>
-                          <p className="text-[11px] text-slate-400 font-mono">#{p.badgeNo}</p>
+                          <p className="text-[11px] text-slate-400 font-mono">{cleanBadge(p.badgeNo)}</p>
                         </div>
                       </div>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded flex-shrink-0 ${
@@ -2733,7 +2736,7 @@ export default function App() {
                             <img src={m.avatarUrl || PRESET_AVATARS[0]} alt={m.name} className="w-7 h-7 rounded-full object-cover" />
                             <div className="min-w-0">
                               <span className="font-bold text-white truncate block">{m.name}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">{m.designation} • #{m.badgeNo}</span>
+                              <span className="text-[10px] text-slate-400 font-mono">{m.designation} • {cleanBadge(m.badgeNo)}</span>
                             </div>
                           </div>
 
@@ -2957,7 +2960,7 @@ export default function App() {
                         <div className="font-bold text-white">{user.name}</div>
                         <div className="text-[10px] text-slate-500 font-mono">{user.id}</div>
                       </td>
-                      <td className="p-3 font-mono font-bold text-slate-300">#{user.badgeNo}</td>
+                      <td className="p-3 font-mono font-bold text-slate-300">{cleanBadge(user.badgeNo)}</td>
                       <td className="p-3 font-mono text-slate-400">{maskMobile(user.mobile)}</td>
                       <td className="p-3 text-slate-400 truncate max-w-[150px]">{user.device || "Browser"}</td>
                       <td className="p-3 text-slate-400 font-mono text-[11px]">{new Date(user.lastActive).toLocaleTimeString()}</td>
@@ -3134,7 +3137,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <span className="text-xs uppercase tracking-widest text-amber-400 font-bold">{t.dept}</span>
                   <span className="text-slate-600">•</span>
-                  <span className="text-xs text-slate-400 font-mono">#{selectedOfficer.badgeNo}</span>
+                  <span className="text-xs text-slate-400 font-mono">{cleanBadge(selectedOfficer.badgeNo)}</span>
                 </div>
                 <button onClick={() => setSelectedOfficer(null)} className="text-slate-400 hover:text-white">
                   <X className="w-5 h-5" />
@@ -3179,7 +3182,7 @@ export default function App() {
                   <div>
                     <h2 className="text-base min-[360px]:text-lg font-bold text-white">{selectedOfficer.name}</h2>
                     <p className="text-xs text-amber-400 font-mono">{selectedOfficer.code} • {selectedOfficer.designation}</p>
-                    <p className="text-xs text-slate-400 mt-0.5 font-mono">બક્કલ નંબર: #{selectedOfficer.badgeNo}</p>
+                    <p className="text-xs text-slate-400 mt-0.5 font-mono">બક્કલ નંબર: {cleanBadge(selectedOfficer.badgeNo)}</p>
                   </div>
                 </div>
 
@@ -3563,7 +3566,7 @@ export default function App() {
                           <img src={p.avatarUrl || PRESET_AVATARS[0]} alt={p.name} className="w-8 h-8 rounded-full object-cover" />
                           <div className="min-w-0">
                             <span className="font-bold text-white block truncate">{p.name}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">Current: {p.code} • #{p.badgeNo} ({p.designation})</span>
+                            <span className="text-[10px] text-slate-400 font-mono">Current: {p.code} • {cleanBadge(p.badgeNo)} ({p.designation})</span>
                           </div>
                         </div>
 
@@ -3826,7 +3829,7 @@ export default function App() {
                         <div key={u.id} className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
                           <div>
                             <span className="font-bold text-white block">{u.name}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">#{u.badgeNo} • {u.mobile}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{cleanBadge(u.badgeNo)} • {u.mobile}</span>
                           </div>
                           <select
                             value={u.role}
@@ -3993,7 +3996,7 @@ export default function App() {
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-sm p-5 space-y-4 text-xs">
               <h3 className="text-base font-bold text-white">Delete Officer Confirmation</h3>
               <p className="text-slate-400">
-                Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span> (#{deleteTarget.badgeNo}) from the database?
+                Are you sure you want to delete <span className="text-white font-bold">{deleteTarget.name}</span> ({cleanBadge(deleteTarget.badgeNo)}) from the database?
               </p>
               <div className="flex gap-2">
                 <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2 bg-slate-800 text-slate-300 rounded-xl font-bold">Cancel</button>
@@ -4049,7 +4052,7 @@ export default function App() {
                   <div className="min-w-0 flex-1">
                     <h3 className="font-bold text-white text-sm truncate">{photoTargetOfficer.name}</h3>
                     <p className="text-amber-400 font-mono text-[11px]">{photoTargetOfficer.designation} • {photoTargetOfficer.code}</p>
-                    <p className="text-slate-400 font-mono text-[11px]">બક્કલ નં: #{photoTargetOfficer.badgeNo}</p>
+                    <p className="text-slate-400 font-mono text-[11px]">બક્કલ નં: {cleanBadge(photoTargetOfficer.badgeNo)}</p>
                   </div>
                 </div>
 
