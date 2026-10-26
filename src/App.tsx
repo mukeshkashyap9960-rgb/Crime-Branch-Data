@@ -10,7 +10,7 @@ import {
   HeartPulse, Clock, SlidersHorizontal, Settings2, Save, FileDown,
   UploadCloud, ExternalLink, HardDrive, ShieldCheck, Zap,
   Megaphone, Radio, ListTodo, CheckCircle2, Clock3, UserCheck,
-  Volume2, VolumeX, Share2, Send, UserCog, Camera
+  Volume2, VolumeX, Share2, Send, UserCog, Camera, Link, Upload, Image as ImageIcon
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -426,6 +426,11 @@ export default function App() {
 
   // Single record deletion target
   const [deleteTarget, setDeleteTarget] = useState<Personnel | null>(null);
+
+  // Photo Update Dialog state (Upload from Computer & Image URL)
+  const [photoTargetOfficer, setPhotoTargetOfficer] = useState<Personnel | null>(null);
+  const [photoUrlInput, setPhotoUrlInput] = useState("");
+  const [photoPreview, setPhotoPreview] = useState("");
 
   // Toast Notification
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" | "warning" } | null>(null);
@@ -859,18 +864,30 @@ export default function App() {
   };
 
   // ---------------------------------------------------------------------------
-  // SHARE OFFICER DETAILS (STRICTLY ONLY: NAME, MOBILE NO., AND NAVRITI)
+  // SHARE OFFICER DETAILS & WHATSAPP MESSAGE FORMAT
   // ---------------------------------------------------------------------------
+  const formatOfficerShareMessage = (p: Personnel): string => {
+    const badge = p.badgeNo ? (p.badgeNo.startsWith("#") ? p.badgeNo : `#${p.badgeNo}`) : "-";
+    const designationWithSquad = p.code ? `${p.designation} (${p.code})` : p.designation;
+    const mob = p.mobile || "-";
+    const duty = p.dutyPlace || "-";
+
+    return `👮 ગુજરાત પોલીસ - ક્રાઇમ બ્રાન્ચ (Gujarat Police - Crime Branch)
+━━━━━━━━━━━━━━━━━━━━
+• નામ: ${p.name}
+• હોદ્દો: ${designationWithSquad}
+• બક્કલ નં: ${badge}
+• મોબાઇલ: ${mob}
+• ફરજની જગ્યા: ${duty}`;
+  };
+
   const handleShareOfficer = async (p: Personnel) => {
-    const navriti = p.retirementDate || "-";
-    const shareText = language === "gu"
-      ? `નામ: ${p.name}\nમોબાઇલ નંબર: ${p.mobile || "-"}\nનિવૃત્તિ તારીખ: ${navriti}`
-      : `Name: ${p.name}\nMobile No: ${p.mobile || "-"}\nRetirement Date: ${navriti}`;
+    const shareText = formatOfficerShareMessage(p);
 
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `${p.name} - Details`,
+          title: `👮 ${p.name} - ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ`,
           text: shareText
         });
         showToast(language === "gu" ? "✓ વિગત સફળતાપૂર્વક શેર કરી" : "✓ Details shared successfully", "success");
@@ -882,7 +899,7 @@ export default function App() {
 
     try {
       await navigator.clipboard.writeText(shareText);
-      showToast(language === "gu" ? "✓ નામ, મોબાઇલ અને નિવૃત્તિ વિગત કોપી થઈ ગઈ!" : "✓ Name, Mobile & Retirement copied!", "success");
+      showToast(language === "gu" ? "✓ વિગત સફળતાપૂર્વક કોપી થઈ ગઈ!" : "✓ Officer details copied!", "success");
     } catch (err) {
       showToast("Failed to copy details", "error");
     }
@@ -1058,12 +1075,40 @@ export default function App() {
     showToast(language === "gu" ? "✓ ફરજની જગ્યા અને નીમણુંક સફળતાપૂર્વક સ્વેપ થઈ ગઈ!" : "✓ Successfully swapped Duty Place and Appointment across all records!", "success");
   };
 
-  const handlePhotoUpload = async (personId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  // ---------------------------------------------------------------------------
+  // OFFICER PHOTO MANAGEMENT (COMPUTER UPLOAD & IMAGE URL)
+  // ---------------------------------------------------------------------------
+  const handleOpenPhotoModal = (officer: Personnel) => {
+    setPhotoTargetOfficer(officer);
+    setPhotoUrlInput(officer.avatarUrl || "");
+    setPhotoPreview(officer.avatarUrl || PRESET_AVATARS[0]);
+  };
+
+  const handleSavePhotoUrl = async (urlToSave?: string) => {
+    if (!photoTargetOfficer) return;
+    const finalUrl = (urlToSave !== undefined ? urlToSave : photoUrlInput).trim();
+    if (!finalUrl) {
+      showToast(language === "gu" ? "કૃપા કરીને ફોટો URL દાખલ કરો" : "Please enter image URL", "warning");
+      return;
+    }
+
+    const updated = personnel.map((p) => (p.id === photoTargetOfficer.id ? { ...p, avatarUrl: finalUrl } : p));
+    setPersonnel(updated);
+
+    if (selectedOfficer && selectedOfficer.id === photoTargetOfficer.id) {
+      setSelectedOfficer({ ...selectedOfficer, avatarUrl: finalUrl });
+    }
+
+    await syncToDatabase(updated, `Updated photo for ${photoTargetOfficer.name}`);
+    setPhotoTargetOfficer(null);
+    showToast(language === "gu" ? "✓ ફોટો સફળતાપૂર્વક અપડેટ થયો!" : "✓ Photo updated successfully!", "success");
+  };
+
+  const handleComputerPhotoUpload = async (personId: string, file: File) => {
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
-      showToast("Please select a valid image file", "error");
+      showToast(language === "gu" ? "કૃપા કરીને માન્ય ઇમેજ ફાઇલ પસંદ કરો" : "Please select a valid image file", "error");
       return;
     }
 
@@ -1079,10 +1124,22 @@ export default function App() {
         setSelectedOfficer({ ...selectedOfficer, avatarUrl: base64Url });
       }
 
-      await syncToDatabase(updated, `Updated photo for officer ID ${personId}`);
-      showToast(language === "gu" ? "✓ ફોટો સફળતાપૂર્વક અપલોડ થયો!" : "✓ Photo uploaded successfully!", "success");
+      if (photoTargetOfficer && photoTargetOfficer.id === personId) {
+        setPhotoPreview(base64Url);
+        setPhotoUrlInput(base64Url);
+      }
+
+      await syncToDatabase(updated, `Uploaded photo for officer ID ${personId}`);
+      showToast(language === "gu" ? "✓ કોમ્પ્યુટર માંથી ફોટો અપલોડ થઈ ગયો!" : "✓ Photo uploaded from computer!", "success");
     };
     reader.readAsDataURL(file);
+  };
+
+  const handlePhotoUpload = async (personId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await handleComputerPhotoUpload(personId, file);
+    }
   };
 
   const handleResequenceSrNos = () => {
@@ -2319,12 +2376,13 @@ export default function App() {
                         className="hover:bg-slate-800/60 transition cursor-pointer"
                       >
                         <td className="p-3 font-mono font-bold text-slate-400">{p.srNo}</td>
-                        <td className="p-3">
+                        <td className="p-3" onClick={(e) => { e.stopPropagation(); handleOpenPhotoModal(p); }}>
                           <img
                             src={p.avatarUrl || PRESET_AVATARS[0]}
                             alt={p.name}
-                            className="w-8 h-8 rounded-full object-cover border border-amber-500/40"
+                            className="w-8 h-8 rounded-full object-cover border border-amber-500/40 hover:border-amber-400 cursor-pointer shadow hover:scale-105 transition"
                             loading="lazy"
+                            title="ફોટો અપલોડ / URL બદલો (Change Photo / URL)"
                           />
                         </td>
                         <td className="p-3 font-mono text-amber-400 font-bold">{p.code}</td>
@@ -2371,11 +2429,11 @@ export default function App() {
                             )}
                             {p.mobile && (
                               <a
-                                href={`https://wa.me/91${p.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${p.name} (${p.designation} #${p.badgeNo})`)}`}
+                                href={`https://wa.me/91${p.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(formatOfficerShareMessage(p))}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="p-1.5 rounded-lg bg-green-500/20 hover:bg-green-600 text-green-400 hover:text-white transition"
-                                title="WhatsApp Message"
+                                title="WhatsApp Message / વોટ્સએપ મેસેજ"
                               >
                                 <MessageSquare className="w-3.5 h-3.5" />
                               </a>
@@ -2470,18 +2528,37 @@ export default function App() {
                           <img
                             src={p.avatarUrl || PRESET_AVATARS[0]}
                             alt={p.name}
-                            className="w-10 h-10 min-[360px]:w-12 min-[360px]:h-12 rounded-full object-cover border-2 border-amber-500/50 shadow"
+                            className="w-11 h-11 min-[360px]:w-12 min-[360px]:h-12 rounded-full object-cover border-2 border-amber-500/50 group-hover:border-amber-400 shadow cursor-pointer transition"
                             loading="lazy"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenPhotoModal(p);
+                            }}
+                            title="ફોટો અપલોડ / URL બદલો (Change / Upload Photo)"
                           />
-                          <label onClick={(e) => e.stopPropagation()} className="absolute -bottom-1 -right-1 p-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg cursor-pointer shadow transition" title="Upload Photo / ફોટો અપલોડ કરો">
-                            <Camera className="w-3 h-3" />
-                            <input
-                              type="file"
-                              accept="image/*"
-                              className="hidden"
-                              onChange={(e) => handlePhotoUpload(p.id, e)}
-                            />
-                          </label>
+                          {/* Photo controls: 1. Computer Upload, 2. URL Input */}
+                          <div className="absolute -bottom-1 -right-2 flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                            <label
+                              className="p-1 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-md cursor-pointer shadow transition"
+                              title="કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)"
+                            >
+                              <Camera className="w-3 h-3" />
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => handlePhotoUpload(p.id, e)}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenPhotoModal(p)}
+                              className="p-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md cursor-pointer shadow transition"
+                              title="કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)"
+                            >
+                              <Link className="w-3 h-3" />
+                            </button>
+                          </div>
                         </div>
                         <div className="min-w-0">
                           <div className="flex items-center gap-1.5 flex-wrap">
@@ -2539,7 +2616,7 @@ export default function App() {
 
                       {p.mobile && (
                         <a
-                          href={`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${p.name} (${p.designation} #${p.badgeNo})`)}`}
+                          href={`https://wa.me/91${cleanPhone}?text=${encodeURIComponent(formatOfficerShareMessage(p))}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="px-2 py-1.5 rounded-lg bg-green-500/20 hover:bg-green-600 text-green-400 hover:text-white border border-green-500/30 flex items-center gap-1 font-bold text-[11px] transition"
@@ -3062,17 +3139,32 @@ export default function App() {
                     <img
                       src={selectedOfficer.avatarUrl || PRESET_AVATARS[0]}
                       alt={selectedOfficer.name}
-                      className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 shadow"
+                      className="w-14 h-14 min-[360px]:w-16 min-[360px]:h-16 rounded-2xl object-cover border-2 border-amber-500/50 hover:border-amber-400 cursor-pointer shadow-lg transition"
+                      onClick={() => handleOpenPhotoModal(selectedOfficer)}
+                      title="ફોટો અપલોડ / URL બદલો"
                     />
-                    <label className="absolute -bottom-1 -right-1 p-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl cursor-pointer shadow-lg transition" title="Upload Photo / ફોટો અપલોડ કરો">
-                      <Camera className="w-3.5 h-3.5" />
-                      <input
-                        type="file"
-                        accept="image/*"
-                        className="hidden"
-                        onChange={(e) => handlePhotoUpload(selectedOfficer.id, e)}
-                      />
-                    </label>
+                    <div className="absolute -bottom-1.5 -right-2 flex items-center gap-1">
+                      <label 
+                        className="p-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl cursor-pointer shadow-lg transition" 
+                        title="કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો (Upload from Computer)"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => handlePhotoUpload(selectedOfficer.id, e)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenPhotoModal(selectedOfficer)}
+                        className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-lg transition"
+                        title="કોમ્પ્યુટર / ઇન્ટરનેટ ફોટો URL દાખલ કરો (Enter Image URL)"
+                      >
+                        <Link className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <h2 className="text-base min-[360px]:text-lg font-bold text-white">{selectedOfficer.name}</h2>
@@ -3098,7 +3190,7 @@ export default function App() {
                   <a
                     href={
                       selectedOfficer.mobile
-                        ? `https://wa.me/91${selectedOfficer.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(`ગુજરાત પોલીસ ક્રાઇમ બ્રાન્ચ: અધિકારી ${selectedOfficer.name} (${selectedOfficer.designation} #${selectedOfficer.badgeNo})`)}`
+                        ? `https://wa.me/91${selectedOfficer.mobile.replace(/[^0-9]/g, "").slice(-10)}?text=${encodeURIComponent(formatOfficerShareMessage(selectedOfficer))}`
                         : "#"
                     }
                     target="_blank"
@@ -3877,6 +3969,173 @@ export default function App() {
                 <button onClick={handleConfirmSingleDelete} className="flex-1 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow">
                   Delete
                 </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =================================================================== */}
+      {/* OFFICER PHOTO MANAGEMENT MODAL (COMPUTER UPLOAD & IMAGE URL)        */}
+      {/* =================================================================== */}
+      <AnimatePresence>
+        {photoTargetOfficer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 min-[360px]:p-4 bg-black/85 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-950 border border-slate-800 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col"
+            >
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 bg-slate-900">
+                <div className="flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-amber-400" />
+                  <h2 className="text-sm min-[360px]:text-base font-bold text-white">
+                    {language === "gu" ? "અધિકારી ફોટો અપલોડ / URL" : "Officer Photo & URL"}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setPhotoTargetOfficer(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4 max-h-[80vh] overflow-y-auto text-xs">
+                {/* Officer Mini Card */}
+                <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
+                  <div className="relative">
+                    <img
+                      src={photoPreview || PRESET_AVATARS[0]}
+                      alt={photoTargetOfficer.name}
+                      className="w-16 h-16 rounded-2xl object-cover border-2 border-amber-500 shadow-lg"
+                    />
+                    <span className="absolute -top-1.5 -right-1.5 px-1.5 py-0.5 rounded-full bg-emerald-500 text-[9px] font-bold text-slate-950">
+                      LIVE
+                    </span>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-bold text-white text-sm truncate">{photoTargetOfficer.name}</h3>
+                    <p className="text-amber-400 font-mono text-[11px]">{photoTargetOfficer.designation} • {photoTargetOfficer.code}</p>
+                    <p className="text-slate-400 font-mono text-[11px]">બક્કલ નં: #{photoTargetOfficer.badgeNo}</p>
+                  </div>
+                </div>
+
+                {/* OPTION 1: UPLOAD FROM COMPUTER */}
+                <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                      <Upload className="w-4 h-4 text-amber-400" />
+                      {language === "gu" ? "૧. કોમ્પ્યુટર માંથી ફોટો અપલોડ કરો" : "1. Upload from Computer"}
+                    </span>
+                    <span className="text-[10px] text-amber-400/80 font-mono">PNG / JPG / WEBP</span>
+                  </div>
+                  <label className="w-full flex flex-col items-center justify-center p-4 border-2 border-dashed border-amber-500/40 hover:border-amber-400 rounded-xl bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer transition text-center group">
+                    <Camera className="w-7 h-7 text-amber-400 group-hover:scale-110 transition mb-1.5" />
+                    <span className="font-bold text-amber-300 text-xs">
+                      {language === "gu" ? "💻 કોમ્પ્યુટર માંથી ફોટો પસંદ કરો" : "Choose photo from computer"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">
+                      {language === "gu" ? "ક્લિક કરીને કોમ્પ્યુટર માંથી ફાઇલ સિલેક્ટ કરો" : "Click to browse device storage"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          handleComputerPhotoUpload(photoTargetOfficer.id, file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {/* OPTION 2: ENTER IMAGE URL */}
+                <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                      <Link className="w-4 h-4 text-indigo-400" />
+                      {language === "gu" ? "૨. ફોટો URL દાખલ કરો" : "2. Enter Image URL"}
+                    </span>
+                    <span className="text-[10px] text-slate-400">Web / Cloud URL</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="url"
+                      placeholder="https://example.com/officer-photo.jpg"
+                      value={photoUrlInput}
+                      onChange={(e) => {
+                        setPhotoUrlInput(e.target.value);
+                        if (e.target.value.trim()) {
+                          setPhotoPreview(e.target.value.trim());
+                        }
+                      }}
+                      className="flex-1 bg-slate-950 border border-slate-700 focus:border-indigo-500 rounded-xl px-3 py-2 text-white placeholder-slate-600 font-mono text-xs focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (photoUrlInput.trim()) {
+                          setPhotoPreview(photoUrlInput.trim());
+                          showToast("Preview updated", "info");
+                        }
+                      }}
+                      className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl transition flex-shrink-0"
+                    >
+                      {language === "gu" ? "પ્રિવ્યૂ" : "Preview"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* OPTION 3: PRESET POLICE AVATARS */}
+                <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+                  <span className="font-bold text-slate-200 block text-[11px]">
+                    {language === "gu" ? "૩. અથવા પ્રીસેટ પોલીસ અવતાર પસંદ કરો:" : "3. Or Select Preset Police Avatar:"}
+                  </span>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    {PRESET_AVATARS.map((av, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setPhotoPreview(av);
+                          setPhotoUrlInput(av);
+                        }}
+                        className={`relative rounded-full p-0.5 transition flex-shrink-0 ${
+                          photoPreview === av ? "ring-2 ring-amber-400 scale-105" : "opacity-75 hover:opacity-100"
+                        }`}
+                      >
+                        <img
+                          src={av}
+                          alt="avatar"
+                          className="w-9 h-9 rounded-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* ACTION BUTTONS */}
+                <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setPhotoTargetOfficer(null)}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition"
+                  >
+                    {language === "gu" ? "રદ કરો" : "Cancel"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSavePhotoUrl(photoPreview || photoUrlInput)}
+                    className="px-5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl shadow-lg transition flex items-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>{language === "gu" ? "✓ ફોટો સેવ કરો" : "Save Photo"}</span>
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
