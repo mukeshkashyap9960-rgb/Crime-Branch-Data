@@ -1443,9 +1443,9 @@ export default function App() {
             parsedAppointment = temp;
           }
 
-          if (parsedAppointment.includes("એટેચ") || parsedAppointment.toLowerCase().includes("attach") || parsedAppointment.toLowerCase() === "attech") {
+          if (parsedAppointment.toLowerCase().includes("attach") || parsedAppointment.toLowerCase() === "attech") {
             parsedAppointment = "એટેચ";
-          } else if (!parsedAppointment || parsedAppointment === "CRIME") {
+          } else if (!parsedAppointment || parsedAppointment.toLowerCase() === "crime") {
             parsedAppointment = "CRIME";
           }
 
