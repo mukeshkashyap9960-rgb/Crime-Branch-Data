@@ -833,17 +833,12 @@ export default function App() {
 
   const maskMobile = (val: string | undefined) => {
     if (!val) return "-";
-    if (isPrivileged && !maskSensitiveData) return val;
-    if (currentUser?.mobile && val.includes(currentUser.mobile)) return val;
-    const clean = val.replace(/\D/g, "");
-    if (clean.length < 4) return "XXXXXX0000";
-    return `XXXXXX${clean.slice(-4)}`;
+    return val.trim();
   };
 
   const maskWeapon = (val: string | undefined) => {
     if (!val) return "-";
-    if (isPrivileged && !maskSensitiveData) return val;
-    return `WP-***${val.slice(-2)}`;
+    return val.replace(/^WP-?/i, "").trim();
   };
 
   // Global Helper: Clean badge number without any leading '#' symbol
@@ -1431,20 +1426,27 @@ export default function App() {
           let parsedDutyPlace = cols[offset + 5] || rawCode;
           let parsedAppointment = cols[offset + 6] || "CRIME";
 
-          const appointmentKeywords = ["crime", "એટેચ", "attach", "બદલી", "transfer", "ડેપ્યુટેશન", "deputation", "હંગામી", "કાયમી"];
+          // If cols[offset+6] is empty or numeric, check if cols[offset+5] has attachment/transfer info
+          if (!parsedAppointment || !isNaN(Number(parsedAppointment))) {
+            parsedAppointment = "CRIME";
+          }
+
+          const appointmentKeywords = ["crime", "એટેચ", "attach", "બદલી", "transfer", "ડેપ્યુટેશન", "deputation", "હંગામી", "કાયમી", "પોસ્ટે થી એટેચ", "પો.સ્ટે"];
           const placeKeywords = ["સ્કોડ", "પોસ્ટે", "પો.સ્ટે", "સાયબર", "એસ.જી", "ડીસીબી", "શાખા", "કંટ્રોલ", "ઓપરેશન", "થાણું"];
 
           const dutyPlaceIsApp = appointmentKeywords.some((k) => parsedDutyPlace.toLowerCase().includes(k));
           const appIsPlace = placeKeywords.some((k) => parsedAppointment.toLowerCase().includes(k));
 
-          if (dutyPlaceIsApp || appIsPlace) {
+          if (dutyPlaceIsApp && !appIsPlace && !parsedAppointment.includes("એટેચ")) {
             const temp = parsedDutyPlace;
             parsedDutyPlace = parsedAppointment;
             parsedAppointment = temp;
           }
 
           if (parsedAppointment.includes("એટેચ") || parsedAppointment.toLowerCase().includes("attach") || parsedAppointment.toLowerCase() === "attech") {
-            parsedAppointment = "ATTECH";
+            parsedAppointment = "એટેચ";
+          } else if (!parsedAppointment || parsedAppointment === "CRIME") {
+            parsedAppointment = "CRIME";
           }
 
           const rawReportDate = cols[offset + 7] || "01/01/2026";
